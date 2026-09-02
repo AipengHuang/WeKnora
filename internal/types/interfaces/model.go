@@ -21,6 +21,8 @@ type ModelService interface {
 	ListModels(ctx context.Context) ([]*types.Model, error)
 	// UpdateModel updates a model
 	UpdateModel(ctx context.Context, model *types.Model) error
+	// SetDefaultModel 将活动模型设为同类型的唯一默认模型。
+	SetDefaultModel(ctx context.Context, id string) (*types.Model, error)
 	// DeleteModel deletes a model
 	DeleteModel(ctx context.Context, id string) error
 
@@ -65,5 +67,7 @@ type ModelRepository interface {
 	Delete(ctx context.Context, tenantID uint64, id string) error
 	// ClearDefaultByType clears the default flag for all models of a specific type
 	// optionally excluding a specific model ID.
-	ClearDefaultByType(ctx context.Context, tenantID uint, modelType types.ModelType, excludeID string) error
+	ClearDefaultByType(ctx context.Context, tenantID uint64, modelType types.ModelType, excludeID string) error
+	// SetDefault 将目标模型原子提升为租户内同类型的唯一默认模型。
+	SetDefault(ctx context.Context, tenantID uint64, modelID string, modelType types.ModelType) error
 }

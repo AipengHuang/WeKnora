@@ -7,6 +7,7 @@ import (
 
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -106,7 +107,10 @@ func (s *stubModelRepoForDelete) Delete(_ context.Context, _ uint64, id string) 
 	}
 	return nil
 }
-func (s *stubModelRepoForDelete) ClearDefaultByType(context.Context, uint, types.ModelType, string) error {
+func (s *stubModelRepoForDelete) ClearDefaultByType(context.Context, uint64, types.ModelType, string) error {
+	return nil
+}
+func (s *stubModelRepoForDelete) SetDefault(context.Context, uint64, string, types.ModelType) error {
 	return nil
 }
 
@@ -171,6 +175,7 @@ func TestDeleteModel_SucceedsWhenUnreferenced(t *testing.T) {
 }
 
 type stubTenantServiceForModelDelete struct {
+	interfaces.ExternalTenantService
 	tenant *types.Tenant
 }
 

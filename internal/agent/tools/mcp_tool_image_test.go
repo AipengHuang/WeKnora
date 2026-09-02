@@ -178,37 +178,3 @@ func TestExtractContentAndImages_ResourceAndDefault(t *testing.T) {
 		t.Errorf("expected 0 images, got %d", len(images))
 	}
 }
-
-func TestRedactImageData_Immutable(t *testing.T) {
-	original := []mcp.ContentItem{
-		{Type: "text", Text: "hello"},
-		{Type: "image", MimeType: "image/png", Data: "base64data"},
-	}
-	originalData := original[1].Data
-
-	redacted := redactImageData(original)
-
-	// Original should not be modified
-	if original[1].Data != originalData {
-		t.Error("redactImageData mutated the original slice")
-	}
-	// Redacted should have modified data
-	if !strings.Contains(redacted[1].Data, "[redacted") {
-		t.Errorf("expected redacted data, got: %s", redacted[1].Data)
-	}
-	// Text items should be unchanged
-	if redacted[0].Text != "hello" {
-		t.Errorf("expected text unchanged, got: %s", redacted[0].Text)
-	}
-}
-
-func TestRedactImageData_EmptyData(t *testing.T) {
-	original := []mcp.ContentItem{
-		{Type: "image", MimeType: "image/png", Data: ""},
-	}
-	redacted := redactImageData(original)
-
-	if redacted[0].Data != "" {
-		t.Errorf("expected empty data to stay empty, got: %s", redacted[0].Data)
-	}
-}

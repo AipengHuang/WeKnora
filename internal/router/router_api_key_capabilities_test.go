@@ -360,6 +360,7 @@ func TestTenantInfrastructureRoutesDeclareSpecificCapabilities(t *testing.T) {
 	}{
 		{http.MethodGet, "/api/v1/tenants", types.APIKeyCapabilityManageTenantSettings},
 		{http.MethodGet, "/api/v1/models", types.APIKeyCapabilityManageModels},
+		{http.MethodPut, "/api/v1/models/:id/default", types.APIKeyCapabilityManageModels},
 		{http.MethodPost, "/api/v1/evaluation", types.APIKeyCapabilityRunEvaluations},
 		{http.MethodGet, "/api/v1/system/info", types.APIKeyCapabilityManageVectorStores},
 		{http.MethodGet, "/api/v1/mcp-services", types.APIKeyCapabilityManageMCPServices},
@@ -385,7 +386,7 @@ func TestTenantInfrastructureRoutesDeclareSpecificCapabilities(t *testing.T) {
 	}
 }
 
-func TestSandboxConfigRoutesRequireFullAccessOnly(t *testing.T) {
+func TestSandboxConfigRoutesDeclareManageSandboxesCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	g := &rbacGuards{}
 	v1 := gin.New().Group("/api/v1")
@@ -397,6 +398,7 @@ func TestSandboxConfigRoutesRequireFullAccessOnly(t *testing.T) {
 		path   string
 	}{
 		{http.MethodGet, "/api/v1/sandbox-configs"},
+		{http.MethodPut, "/api/v1/sandbox-configs/workspace-policy"},
 		{http.MethodPost, "/api/v1/sandbox-configs"},
 		{http.MethodPost, "/api/v1/sandbox-configs/templates/query"},
 		{http.MethodGet, "/api/v1/sandbox-configs/:id"},
@@ -408,6 +410,7 @@ func TestSandboxConfigRoutesRequireFullAccessOnly(t *testing.T) {
 		{http.MethodGet, "/api/v1/sandbox-configs/:id/skills/:skillId"},
 		{http.MethodGet, "/api/v1/sandbox-configs/:id/skills/:skillId/files"},
 		{http.MethodGet, "/api/v1/sandbox-configs/:id/skills/:skillId/files/content"},
+		{http.MethodPost, "/api/v1/sandbox-configs/:id/skills/:skillId/reinstall"},
 		{http.MethodPatch, "/api/v1/sandbox-configs/:id/skills/:skillId"},
 		{http.MethodDelete, "/api/v1/sandbox-configs/:id/skills/:skillId"},
 		{http.MethodGet, "/api/v1/sandbox-configs/:id/skills/:skillId/install-events"},
@@ -420,16 +423,16 @@ func TestSandboxConfigRoutesRequireFullAccessOnly(t *testing.T) {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			policy := mustLookupAPIKeyPolicy(t, g, tc.method, tc.path)
 			if !policy.RequireFullAccess {
-				t.Fatal("sandbox config routes should require full access")
+				t.Fatal("sandbox config routes should preserve full-access authority")
 			}
-			if len(policy.Capabilities) != 0 {
-				t.Fatalf("sandbox config routes must not be granted by a scoped capability: %#v", policy.Capabilities)
+			if !policyHasCapability(policy, types.APIKeyCapabilityManageSandboxes) {
+				t.Fatalf("sandbox config routes should allow manage_sandboxes: %#v", policy.Capabilities)
 			}
 		})
 	}
 }
 
-func TestSkillCatalogWriteRoutesRequireFullAccess(t *testing.T) {
+func TestSkillCatalogWriteRoutesDeclareManageSandboxesCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	g := &rbacGuards{}
 	v1 := gin.New().Group("/api/v1")
@@ -449,12 +452,34 @@ func TestSkillCatalogWriteRoutesRequireFullAccess(t *testing.T) {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			policy := mustLookupAPIKeyPolicy(t, g, tc.method, tc.path)
 			if !policy.RequireFullAccess {
-				t.Fatal("catalog writes bake into sandbox images and must require full access")
+				t.Fatal("catalog writes should preserve full-access authority")
 			}
-			if len(policy.Capabilities) != 0 {
-				t.Fatalf("catalog writes must not be granted by a scoped capability: %#v", policy.Capabilities)
+			if !policyHasCapability(policy, types.APIKeyCapabilityManageSandboxes) {
+				t.Fatalf("catalog writes should allow manage_sandboxes: %#v", policy.Capabilities)
 			}
 		})
+	}
+}
+
+func TestSkillReadRoutesDeclareAgentCapabilities(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	g := &rbacGuards{}
+	v1 := gin.New().Group("/api/v1")
+	RegisterSkillRoutes(v1, &handler.SkillHandler{}, g)
+
+	for _, path := range []string{"/api/v1/skills", "/api/v1/skills/catalog"} {
+		policy := mustLookupAPIKeyPolicy(t, g, http.MethodGet, path)
+		if !policy.RequireFullAccess {
+			t.Fatalf("%s should preserve full-access authority", path)
+		}
+		for _, capability := range []types.APIKeyCapability{
+			types.APIKeyCapabilityReadAgents,
+			types.APIKeyCapabilityManageAgents,
+		} {
+			if !policyHasCapability(policy, capability) {
+				t.Fatalf("%s should allow %s", path, capability)
+			}
+		}
 	}
 }
 

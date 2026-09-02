@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -9,6 +10,28 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMCPProtocolResultDataPreservesStandardFields(t *testing.T) {
+	result := &mcp.CallToolResult{
+		RawContent:        json.RawMessage(`[{"type":"text","text":"done"}]`),
+		StructuredContent: json.RawMessage(`{"referenceId":"ref-1"}`),
+		Meta:              json.RawMessage(`{"traceId":"trace-1"}`),
+		IsError:           false,
+	}
+	tool := &types.MCPTool{
+		Definition: json.RawMessage(`{"name":"render_card","inputSchema":{"type":"object"},"_meta":{"ui":{"resourceUri":"ui://cards/card/v1/index.html"}}}`),
+	}
+	encoded, err := json.Marshal(mcpProtocolResultData(result, tool))
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	assert.NotNil(t, decoded["content"])
+	assert.Equal(t, false, decoded["isError"])
+	assert.NotNil(t, decoded["structuredContent"])
+	assert.NotNil(t, decoded["_meta"])
+	assert.NotNil(t, decoded["tool"])
+	assert.NotContains(t, decoded, "content_items")
+}
 
 // --- sanitizeName ---
 

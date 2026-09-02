@@ -73,15 +73,21 @@ func RegisterUserFavoriteRoutes(r *gin.RouterGroup, h *handler.UserResourceFavor
 // Viewer+. Future skill upload / enable endpoints must use Admin+ since
 // skills run sandboxed code on tenant resources.
 func RegisterSkillRoutes(r *gin.RouterGroup, skillHandler *handler.SkillHandler, g *rbacGuards) {
-	skills := r.Group("/skills")
+	skills := g.apiKeyGroup(
+		r.Group("/skills"),
+		apiKeyReadAgents(apiKeyManageAgents(apiKeyFullAccess())),
+	)
 	{
 		// Usable skills for @ mention / chat — Viewer+
 		skills.GET("", g.Viewer(), skillHandler.ListSkills)
 		// Catalog reads are Viewer+ so the agent editor can show uninstalled skills.
 		skills.GET("/catalog", g.Viewer(), skillHandler.ListCatalog)
 	}
-	// Catalog writes bake into sandbox images; scoped API keys cannot hold them.
-	catalogWrite := g.apiKeyGroup(r.Group("/skills/catalog"), apiKeyFullAccess())
+	// Catalog 写操作会构建 Sandbox 镜像，因此只接受明确的运营能力。
+	catalogWrite := g.apiKeyGroup(
+		r.Group("/skills/catalog"),
+		apiKeyManageSandboxes(apiKeyFullAccess()),
+	)
 	{
 		catalogWrite.POST("", g.Admin(), skillHandler.RegisterCatalog)
 		catalogWrite.POST("/:id/install", g.Admin(), skillHandler.InstallCatalog)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 type fakeTenantAPIKeyRepo struct {
 	byHash              map[string]*types.TenantAPIKey
 	nextID              uint64
-	lastUsedUpdateCount int
+	lastUsedUpdateCount atomic.Int32
 }
 
 func TestTenantAPIKeyServiceCreateAPIKeyUsesSKPrefix(t *testing.T) {
@@ -24,8 +25,9 @@ func TestTenantAPIKeyServiceCreateAPIKeyUsesSKPrefix(t *testing.T) {
 	svc := NewTenantAPIKeyService(repo)
 
 	result, err := svc.CreateAPIKey(ctx, interfaces.TenantAPIKeyCreateRequest{
-		TenantID: 42,
-		Name:     "integration",
+		TenantID:  42,
+		ScopeType: types.APIKeyScopeTenant,
+		Name:      "integration",
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey returned error: %v", err)
@@ -52,6 +54,18 @@ func (r *fakeTenantAPIKeyRepo) CreateAPIKey(_ context.Context, key *types.Tenant
 	r.byHash[cp.KeyHash] = &cp
 	key.ID = cp.ID
 	return nil
+}
+
+func (r *fakeTenantAPIKeyRepo) PutExternalTenantAPIKey(
+	_ context.Context,
+	_ types.ExternalTenantRef,
+	_ types.ExternalTenantCredentialRef,
+	key *types.TenantAPIKey,
+) (*types.TenantAPIKey, bool, error) {
+	if err := r.CreateAPIKey(context.Background(), key); err != nil {
+		return nil, false, err
+	}
+	return key, true, nil
 }
 
 func (r *fakeTenantAPIKeyRepo) GetAPIKeyByHash(_ context.Context, hash string) (*types.TenantAPIKey, error) {
@@ -115,14 +129,14 @@ func (r *fakeTenantAPIKeyRepo) UpdateAPIKey(
 	return nil, apprepo.ErrTenantAPIKeyNotFound
 }
 
-// TestTenantAPIKeyServiceUpdateNormalizesConfiguration 验证通用更新的输入规范化。
-// 输入包含重复 ID/能力和 UTC+8 到期时间，输出应去重、清理名称并统一为 UTC。
+// TestTenantAPIKeyServiceUpdateNormalizesConfiguration 验证非协议字段的既有规范化。
+// 能力使用精确协议值；知识库 ID、名称和时区继续按各自既有规则处理。
 func TestTenantAPIKeyServiceUpdateNormalizesConfiguration(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeTenantAPIKeyRepo()
 	svc := NewTenantAPIKeyService(repo)
 	created, err := svc.CreateAPIKey(ctx, interfaces.TenantAPIKeyCreateRequest{
-		TenantID: 42, Name: "scoped", Capabilities: []string{"retrieve"},
+		TenantID: 42, ScopeType: types.APIKeyScopeTenant, Name: "scoped", Capabilities: []string{"retrieve"},
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey returned error: %v", err)
@@ -131,7 +145,7 @@ func TestTenantAPIKeyServiceUpdateNormalizesConfiguration(t *testing.T) {
 	expiresAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
 	updated, err := svc.UpdateAPIKey(ctx, interfaces.TenantAPIKeyUpdateRequest{
 		TenantID: 42, APIKeyID: created.APIKey.ID,
-		Name: " updated ", Capabilities: []string{"retrieve", "chat", "retrieve"},
+		Name: " updated ", Capabilities: []string{"retrieve", "chat"},
 		KnowledgeBaseIDs: []string{" kb-1 ", "", "kb-2", "kb-1"},
 		ExpiresAt:        &expiresAt,
 	})
@@ -220,12 +234,7 @@ func (r *fakeTenantAPIKeyRepo) ListKeysWithPlaceholderHash(_ context.Context) ([
 }
 
 func (r *fakeTenantAPIKeyRepo) UpdateAPIKeyLastUsed(_ context.Context, id uint64, at time.Time) error {
-	r.lastUsedUpdateCount++
-	for _, key := range r.byHash {
-		if key.ID == id && key.RevokedAt == nil {
-			key.LastUsedAt = &at
-		}
-	}
+	r.lastUsedUpdateCount.Add(1)
 	return nil
 }
 
@@ -237,6 +246,7 @@ func TestTenantAPIKeyServiceBackfillMissingKeyHashes(t *testing.T) {
 	token := "sk-legacy-token-value"
 	legacy := &types.TenantAPIKey{
 		TenantID:   uint64Pointer(7),
+		ScopeType:  types.APIKeyScopeTenant,
 		Name:       "legacy",
 		KeyHash:    "migrated-tenant-7",
 		APIKey:     token,
@@ -299,8 +309,9 @@ func TestTenantAPIKeyServiceRevokeAPIKey(t *testing.T) {
 	svc := NewTenantAPIKeyService(repo)
 
 	created, err := svc.CreateAPIKey(ctx, interfaces.TenantAPIKeyCreateRequest{
-		TenantID: 42,
-		Name:     "integration",
+		TenantID:  42,
+		ScopeType: types.APIKeyScopeTenant,
+		Name:      "integration",
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey returned error: %v", err)
@@ -319,8 +330,9 @@ func TestTenantAPIKeyServiceAuthenticateThrottlesLastUsedUpdates(t *testing.T) {
 	svc := NewTenantAPIKeyService(repo)
 
 	created, err := svc.CreateAPIKey(ctx, interfaces.TenantAPIKeyCreateRequest{
-		TenantID: 42,
-		Name:     "integration",
+		TenantID:  42,
+		ScopeType: types.APIKeyScopeTenant,
+		Name:      "integration",
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey returned error: %v", err)
@@ -333,11 +345,11 @@ func TestTenantAPIKeyServiceAuthenticateThrottlesLastUsedUpdates(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(500 * time.Millisecond)
-	for repo.lastUsedUpdateCount == 0 && time.Now().Before(deadline) {
+	for repo.lastUsedUpdateCount.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if repo.lastUsedUpdateCount != 1 {
-		t.Fatalf("last_used update count = %d, want 1 (throttled async write)", repo.lastUsedUpdateCount)
+	if repo.lastUsedUpdateCount.Load() != 1 {
+		t.Fatalf("last_used update count = %d, want 1 (throttled async write)", repo.lastUsedUpdateCount.Load())
 	}
 }
 
@@ -349,6 +361,7 @@ func TestTenantAPIKeyServiceAuthenticateRejectsExpiredKey(t *testing.T) {
 	expired := time.Now().UTC().Add(-time.Minute)
 	created, err := svc.CreateAPIKey(ctx, interfaces.TenantAPIKeyCreateRequest{
 		TenantID:  42,
+		ScopeType: types.APIKeyScopeTenant,
 		Name:      "short-lived",
 		ExpiresAt: &expired,
 	})

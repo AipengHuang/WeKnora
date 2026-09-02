@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -34,14 +35,20 @@ func NewTenantAPIKeyService(repo interfaces.TenantAPIKeyRepository) interfaces.T
 func (s *tenantAPIKeyService) CreateAPIKey(
 	ctx context.Context, req interfaces.TenantAPIKeyCreateRequest,
 ) (*interfaces.TenantAPIKeyCreateResult, error) {
-	scopeType := types.NormalizeAPIKeyScopeType(req.ScopeType)
+	scopeType, err := types.ParseAPIKeyScopeType(req.ScopeType)
+	if err != nil {
+		return nil, fmt.Errorf("invalid API key scope: %w", err)
+	}
 	if scopeType == types.APIKeyScopeTenant && req.TenantID == 0 {
 		return nil, errors.New("tenant_id is required")
 	}
 	if scopeType == types.APIKeyScopePlatform && req.FullAccess {
 		return nil, errors.New("platform API keys require explicit capabilities")
 	}
-	capabilities := types.NormalizeAPIKeyCapabilities(types.StringArray(req.Capabilities))
+	capabilities, err := types.ParseAPIKeyCapabilities(types.StringArray(req.Capabilities))
+	if err != nil {
+		return nil, fmt.Errorf("invalid capabilities: %w", err)
+	}
 	if scopeType == types.APIKeyScopePlatform && len(capabilities) == 0 {
 		return nil, errors.New("platform API keys require at least one capability")
 	}
@@ -80,6 +87,8 @@ func (s *tenantAPIKeyService) CreateAPIKey(
 	if err := s.repo.CreateAPIKey(ctx, key); err != nil {
 		return nil, err
 	}
+	// 仓储加密钩子可能改写模型字段；创建边界只恢复本次一次性令牌。
+	key.APIKey = token
 	return &interfaces.TenantAPIKeyCreateResult{APIKey: key, Token: token}, nil
 }
 
@@ -90,6 +99,9 @@ func (s *tenantAPIKeyService) AuthenticateAPIKey(ctx context.Context, token stri
 	}
 	key, err := s.repo.GetAPIKeyByHash(ctx, hashTenantAPIKey(token))
 	if err != nil {
+		return nil, err
+	}
+	if err := validateStoredAPIKeyProtocol(key); err != nil {
 		return nil, err
 	}
 	if key.RevokedAt != nil {
@@ -123,11 +135,25 @@ func (s *tenantAPIKeyService) touchAPIKeyLastUsedAsync(keyID uint64) {
 }
 
 func (s *tenantAPIKeyService) ListAPIKeys(ctx context.Context, tenantID uint64) ([]*types.TenantAPIKey, error) {
-	return s.repo.ListAPIKeys(ctx, tenantID)
+	keys, err := s.repo.ListAPIKeys(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if err := prepareAPIKeysForNonCreateResponse(keys); err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 func (s *tenantAPIKeyService) ListPlatformAPIKeys(ctx context.Context) ([]*types.TenantAPIKey, error) {
-	return s.repo.ListPlatformAPIKeys(ctx)
+	keys, err := s.repo.ListPlatformAPIKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := prepareAPIKeysForNonCreateResponse(keys); err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 // UpdateAPIKey 按创建接口的相同语义更新租户 API Key 配置。
@@ -145,7 +171,10 @@ func (s *tenantAPIKeyService) UpdateAPIKey(
 	if name == "" {
 		return nil, errors.New("name is required")
 	}
-	capabilities := types.NormalizeAPIKeyCapabilities(types.StringArray(req.Capabilities))
+	capabilities, err := types.ParseAPIKeyCapabilities(types.StringArray(req.Capabilities))
+	if err != nil {
+		return nil, fmt.Errorf("invalid capabilities: %w", err)
+	}
 	if !req.FullAccess && len(capabilities) == 0 {
 		return nil, errors.New("capabilities are required for scoped API keys")
 	}
@@ -165,7 +194,51 @@ func (s *tenantAPIKeyService) UpdateAPIKey(
 		key.KnowledgeBaseIDs = nil
 		key.Capabilities = nil
 	}
-	return s.repo.UpdateAPIKey(ctx, req.TenantID, req.APIKeyID, key)
+	updated, err := s.repo.UpdateAPIKey(ctx, req.TenantID, req.APIKeyID, key)
+	if err != nil {
+		return nil, err
+	}
+	if updated != nil {
+		updated.APIKey = ""
+	}
+	return updated, nil
+}
+
+// prepareAPIKeysForNonCreateResponse 校验存储协议并清除非创建响应中的可复用凭据。
+func prepareAPIKeysForNonCreateResponse(keys []*types.TenantAPIKey) error {
+	for _, key := range keys {
+		if err := validateStoredAPIKeyProtocol(key); err != nil {
+			return err
+		}
+		key.APIKey = ""
+	}
+	return nil
+}
+
+// validateStoredAPIKeyProtocol 校验仓储结果使用精确作用域和能力协议。
+func validateStoredAPIKeyProtocol(key *types.TenantAPIKey) error {
+	if key == nil {
+		return errors.New("stored API key is nil")
+	}
+	scopeType, err := types.ParseAPIKeyScopeType(key.ScopeType)
+	if err != nil {
+		return fmt.Errorf("invalid stored API key scope: %w", err)
+	}
+	capabilities, err := types.ParseAPIKeyCapabilities(key.Capabilities)
+	if err != nil {
+		return fmt.Errorf("invalid stored API key capabilities: %w", err)
+	}
+	switch scopeType {
+	case types.APIKeyScopePlatform:
+		if key.TenantID != nil || key.FullAccess || len(capabilities) == 0 {
+			return errors.New("invalid stored platform API key scope")
+		}
+	case types.APIKeyScopeTenant:
+		if key.TenantID == nil || *key.TenantID == 0 {
+			return errors.New("invalid stored tenant API key scope")
+		}
+	}
+	return nil
 }
 
 func (s *tenantAPIKeyService) RevokeAPIKey(ctx context.Context, tenantID uint64, id uint64) error {

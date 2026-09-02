@@ -10,7 +10,7 @@ import (
 )
 
 func TestAzureOpenAIEmbedderBatchEmbedSendsConfiguredDimensions(t *testing.T) {
-	t.Parallel()
+	allowEmbeddingTestHosts(t, "example-resource.openai.azure.com")
 
 	var requestBody map[string]any
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -65,7 +65,7 @@ func TestAzureOpenAIEmbedderBatchEmbedSendsConfiguredDimensions(t *testing.T) {
 }
 
 func TestAzureOpenAIEmbedderBatchEmbedOmitsDimensionsByDefault(t *testing.T) {
-	t.Parallel()
+	allowEmbeddingTestHosts(t, "example-resource.openai.azure.com")
 
 	var requestBody map[string]any
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -105,7 +105,7 @@ func TestAzureOpenAIEmbedderBatchEmbedOmitsDimensionsByDefault(t *testing.T) {
 }
 
 func TestAzureOpenAIEmbedderBatchEmbedSendsDimensionsWhenOverrideEnabledRegardlessOfAPIVersion(t *testing.T) {
-	t.Parallel()
+	allowEmbeddingTestHosts(t, "example-resource.openai.azure.com")
 
 	var requestBody map[string]any
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {

@@ -24,6 +24,7 @@ import (
 // must not be exercised by presigned routes; the panic surfaces test bugs
 // instead of silently returning zero values.
 type stubTenantService struct {
+	interfaces.ExternalTenantService
 	get func(ctx context.Context, id uint64) (*types.Tenant, error)
 }
 

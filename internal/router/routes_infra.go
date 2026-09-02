@@ -32,6 +32,8 @@ func RegisterModelRoutes(
 		models.GET("/:id", g.Viewer(), handler.GetModel)
 		// 更新模型 — Admin+；内置模型仍由服务层额外限定为 SystemAdmin。
 		models.PUT("/:id", g.AdminOrSystemAdmin(), handler.UpdateModel)
+		// 明确提升活动模型为同类型的唯一默认模型 — Admin+。
+		models.PUT("/:id/default", g.AdminOrSystemAdmin(), handler.SetDefaultModel)
 		// 删除模型 — Admin+
 		models.DELETE("/:id", g.Admin(), handler.DeleteModel)
 		// Per-field credential subresource (see internal/handler/model_credentials.go) — Admin+
@@ -40,16 +42,17 @@ func RegisterModelRoutes(
 	}
 }
 
-// Sandbox configs are workspace infrastructure that hold provider credentials.
-// Scoped API keys cannot safely receive partial authority over them yet because
-// mutation can strand remote sandboxes.
+// Sandbox 配置及其 Skill 镜像由独立运营凭据管理，普通运行密钥不获得该能力。
 func RegisterSandboxConfigRoutes(
 	r *gin.RouterGroup,
 	h *handler.SandboxConfigHandler,
 	skills *handler.SandboxSkillHandler,
 	g *rbacGuards,
 ) {
-	configs := g.apiKeyGroup(r.Group("/sandbox-configs"), apiKeyFullAccess())
+	configs := g.apiKeyGroup(
+		r.Group("/sandbox-configs"),
+		apiKeyManageSandboxes(apiKeyFullAccess()),
+	)
 	{
 		configs.GET("", g.Viewer(), h.List)
 		configs.PUT("/workspace-policy", g.Admin(), h.SetWorkspacePolicy)
@@ -176,20 +179,18 @@ func RegisterMCPServiceRoutes(
 		mcpServices.DELETE("/:id/oauth/token", g.Viewer(), oauthHandler.Revoke)
 	}
 
-	// /agent tool-approval + OAuth resolution are interactive human flows;
-	// not declared for API keys (default-deny).
+	// /agent 下的交互确认同时允许租户成员和具备 chat 能力的运行时密钥。
 	agentTool := r.Group("/agent")
 	{
-		// Resolving a pending tool-approval is gated to tenant members
-		// (Viewer+). The approval card surfaces inside an agent chat the
-		// caller initiated — restricting it to Admin+ blocks the only
-		// people who actually have context to approve, so the gate is
-		// kept at "anyone in the tenant" instead.
-		agentTool.POST("/tool-approvals/:pending_id", g.Viewer(), handler.ResolveToolApproval)
-		// Resume an agent run paused on an in-conversation MCP OAuth prompt.
-		// Same tenant-member (Viewer+) gating rationale as tool-approvals.
-		agentTool.POST("/mcp-oauth-resolutions/:pending_id", g.Viewer(), oauthHandler.ResolveMCPOAuth)
-		agentTool.POST("/mcp-oauth-resolutions/:pending_id/cancel", g.Viewer(), oauthHandler.CancelMCPOAuth)
+		// 工具确认只允许 Viewer+ 成员，或具备 chat 能力及以上权限的运行时密钥。
+		// 发起会话的主体需要完成确认，因此不额外提升到 Admin+。
+		g.apiKeyRoute(agentTool, http.MethodPost, "/tool-approvals/:pending_id",
+			apiKeyChat(apiKeyFullAccess()), g.Viewer(), handler.ResolveToolApproval)
+		// MCP OAuth 恢复与取消采用相同的 Viewer+ 或 chat 能力边界。
+		g.apiKeyRoute(agentTool, http.MethodPost, "/mcp-oauth-resolutions/:pending_id",
+			apiKeyChat(apiKeyFullAccess()), g.Viewer(), oauthHandler.ResolveMCPOAuth)
+		g.apiKeyRoute(agentTool, http.MethodPost, "/mcp-oauth-resolutions/:pending_id/cancel",
+			apiKeyChat(apiKeyFullAccess()), g.Viewer(), oauthHandler.CancelMCPOAuth)
 	}
 }
 

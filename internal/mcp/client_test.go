@@ -1,13 +1,83 @@
 package mcp
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/mark3labs/mcp-go/client/transport"
+	protocol "github.com/mark3labs/mcp-go/mcp"
 )
+
+func decodeJSONObject(t *testing.T, value json.RawMessage) map[string]any {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		t.Fatalf("failed to decode JSON object: %v", err)
+	}
+	return decoded
+}
+
+func TestConvertProtocolToolPreservesStandardDefinition(t *testing.T) {
+	readOnly := true
+	tool := protocol.Tool{
+		Name: "render_card", Description: "Render a card",
+		RawInputSchema:  json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`),
+		RawOutputSchema: json.RawMessage(`{"type":"object","properties":{"title":{"type":"string"}}}`),
+		Annotations:     protocol.ToolAnnotation{Title: "Card", ReadOnlyHint: &readOnly},
+		Meta: protocol.NewMetaFromMap(map[string]any{
+			"ui": map[string]any{"resourceUri": "ui://cards/card/v1/index.html"},
+		}),
+	}
+	converted, err := convertProtocolTool(tool)
+	if err != nil {
+		t.Fatalf("convertProtocolTool returned error: %v", err)
+	}
+	if decodeJSONObject(t, converted.Meta)["ui"] == nil {
+		t.Fatal("tool _meta was not preserved")
+	}
+	if decodeJSONObject(t, converted.OutputSchema)["type"] != "object" {
+		t.Fatal("outputSchema was not preserved")
+	}
+	definition := decodeJSONObject(t, converted.Definition)
+	if definition["_meta"] == nil || definition["annotations"] == nil {
+		t.Fatal("complete tool definition was not preserved")
+	}
+}
+
+func TestConvertProtocolCallResultPreservesStructuredFields(t *testing.T) {
+	result := protocol.NewToolResultStructured(
+		map[string]any{"artifact": map[string]any{"referenceId": "ref-1"}},
+		"Created artifact",
+	)
+	result.Meta = protocol.NewMetaFromMap(map[string]any{"traceId": "trace-1"})
+	converted, err := convertProtocolCallResult(result)
+	if err != nil {
+		t.Fatalf("convertProtocolCallResult returned error: %v", err)
+	}
+	if decodeJSONObject(t, converted.StructuredContent)["artifact"] == nil {
+		t.Fatal("structuredContent was not preserved")
+	}
+	if decodeJSONObject(t, converted.Meta)["traceId"] != "trace-1" {
+		t.Fatal("result _meta was not preserved")
+	}
+	var content []map[string]any
+	if err := json.Unmarshal(converted.RawContent, &content); err != nil || len(content) != 1 {
+		t.Fatalf("content was not preserved: %v", err)
+	}
+}
+
+func TestConvertProtocolCallResultRejectsNonObjectStructuredContent(t *testing.T) {
+	_, err := convertProtocolCallResult(&protocol.CallToolResult{
+		Content:           []protocol.Content{protocol.NewTextContent("invalid")},
+		StructuredContent: []string{"invalid"},
+	})
+	if err == nil {
+		t.Fatal("expected non-object structuredContent to be rejected")
+	}
+}
 
 func TestAsOAuthRequired(t *testing.T) {
 	t.Run("nil error", func(t *testing.T) {

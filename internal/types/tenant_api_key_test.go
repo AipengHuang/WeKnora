@@ -16,9 +16,9 @@ func TestTenantAPIKeyScopeNormalizeDefaultsToScopedAccess(t *testing.T) {
 	}
 }
 
-func TestTenantAPIKeyScopeNormalizeDropsInvalidCapabilities(t *testing.T) {
+func TestTenantAPIKeyScopeNormalizeDoesNotRewriteCapabilities(t *testing.T) {
 	scope := TenantAPIKeyScope{
-		Capabilities: StringArray{"chat", "bogus", "retrieve", "chat"},
+		Capabilities: StringArray{"chat", "retrieve"},
 	}.Normalize()
 	want := StringArray{"chat", "retrieve"}
 	if len(scope.Capabilities) != len(want) {
@@ -27,6 +27,20 @@ func TestTenantAPIKeyScopeNormalizeDropsInvalidCapabilities(t *testing.T) {
 	for i := range want {
 		if scope.Capabilities[i] != want[i] {
 			t.Fatalf("capabilities = %#v, want %#v", scope.Capabilities, want)
+		}
+	}
+}
+
+func TestParseAPIKeyScopeTypeRejectsAliases(t *testing.T) {
+	for _, value := range []APIKeyScopeType{"", "tenant ", "TENANT", "unknown"} {
+		if _, err := ParseAPIKeyScopeType(value); err == nil {
+			t.Fatalf("ParseAPIKeyScopeType(%q) returned nil error", value)
+		}
+	}
+	for _, value := range []APIKeyScopeType{APIKeyScopeTenant, APIKeyScopePlatform} {
+		parsed, err := ParseAPIKeyScopeType(value)
+		if err != nil || parsed != value {
+			t.Fatalf("ParseAPIKeyScopeType(%q) = (%q, %v)", value, parsed, err)
 		}
 	}
 }

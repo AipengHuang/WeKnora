@@ -62,25 +62,23 @@ func (h *Handler) ListSessionArtifacts(c *gin.Context) {
 		return
 	}
 
-	artifacts, err := h.messageService.GetSessionArtifacts(ctx, sessionID)
-	if err != nil {
-		logger.Errorf(ctx, "list session artifacts failed: session=%s err=%v", sessionID, err)
-		c.Error(errors.NewInternalServerError(err.Error()))
-		return
-	}
-
-	items := make([]artifactListItem, 0, len(artifacts))
-	for i, a := range artifacts {
-		items = append(items, artifactListItem{
-			Index:      i,
-			Handle:     artifactHandle(a),
-			FileName:   a.FileName,
-			FileType:   a.FileType,
-			FileSize:   a.FileSize,
-			SourcePath: a.SourcePath,
-			ModTime:    a.ModTime,
-			CreatedAt:  a.CreatedAt,
-		})
+	items := make([]artifactListItem, 0)
+	const pageSize = 100
+	for page := 1; ; page++ {
+		messages, err := h.messageService.GetMessagesBySession(ctx, sessionID, page, pageSize)
+		if err != nil {
+			logger.Errorf(ctx, "list session artifact messages failed: session=%s err=%v", sessionID, err)
+			c.Error(errors.NewInternalServerError(err.Error()))
+			return
+		}
+		for _, message := range messages {
+			for index, artifact := range message.Artifacts {
+				items = append(items, newArtifactListItem(message.ID, index, artifact))
+			}
+		}
+		if len(messages) < pageSize {
+			break
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -123,16 +121,7 @@ func (h *Handler) ListMessageArtifacts(c *gin.Context) {
 
 	items := make([]artifactListItem, 0, len(msg.Artifacts))
 	for i, a := range msg.Artifacts {
-		items = append(items, artifactListItem{
-			Index:      i,
-			Handle:     artifactHandle(a),
-			FileName:   a.FileName,
-			FileType:   a.FileType,
-			FileSize:   a.FileSize,
-			SourcePath: a.SourcePath,
-			ModTime:    a.ModTime,
-			CreatedAt:  a.CreatedAt,
-		})
+		items = append(items, newArtifactListItem(messageID, i, a))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -223,11 +212,13 @@ func (h *Handler) DownloadMessageArtifact(c *gin.Context) {
 // body references and what an authorizing proxy resolves — while the physical
 // bucket/key stays server side.
 type artifactListItem struct {
-	Index int `json:"index"`
+	Index     int    `json:"index"`
+	MessageID string `json:"message_id"`
 	// Handle is the artifact's `resource://<handle>` reference, matching the
 	// destinations in the message body. Empty when the deployment runs without
 	// a resource catalog, in which case the body references files by name.
 	Handle     string `json:"handle,omitempty"`
+	ToolCallID string `json:"tool_call_id"`
 	FileName   string `json:"file_name"`
 	FileType   string `json:"file_type"`
 	FileSize   int64  `json:"file_size"`
@@ -236,6 +227,22 @@ type artifactListItem struct {
 	// the rest of the messages API.
 	ModTime   any `json:"mod_time"`
 	CreatedAt any `json:"created_at"`
+}
+
+// newArtifactListItem 统一生成会话与单消息接口使用的公开产物记录。
+func newArtifactListItem(messageID string, index int, artifact types.MessageArtifact) artifactListItem {
+	return artifactListItem{
+		Index:      index,
+		MessageID:  messageID,
+		Handle:     artifactHandle(artifact),
+		ToolCallID: artifact.ToolCallID,
+		FileName:   artifact.FileName,
+		FileType:   artifact.FileType,
+		FileSize:   artifact.FileSize,
+		SourcePath: artifact.SourcePath,
+		ModTime:    artifact.ModTime,
+		CreatedAt:  artifact.CreatedAt,
+	}
 }
 
 // mimeTypeFor picks a Content-Type by extension and falls back to

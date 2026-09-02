@@ -80,11 +80,9 @@ func RegisterTenantRoutes(
 		g.apiKeyRoute(tenantRoutes, http.MethodGet, "/kv/:key", apiKeyManageTenantSettings(apiKeyFullAccess()), g.Viewer(), handler.GetTenantKV)
 		g.apiKeyRoute(tenantRoutes, http.MethodPut, "/kv/:key", apiKeyManageTenantSettings(apiKeyFullAccess()), g.Admin(), handler.UpdateTenantKV)
 
-		// Per-tenant endpoints share PathTenantMatch at the group level.
-		// Most /tenants/:id/* endpoints stay undeclared for API keys by
-		// default — tenant lifecycle and key/principal management require
-		// full tenant access or JWT ownership. Member/invitation management
-		// opts in below through the manage_members capability.
+		// 每个租户端点统一执行 PathTenantMatch。平台密钥只有声明精确系统能力后
+		// 才能管理租户、运行时密钥和外部主体配置；租户密钥仍默认拒绝。
+		// 成员与邀请接口仅按下方显式声明的 manage_members 能力开放。
 		tenantByID := tenantRoutes.Group("/:id", g.PathTenantMatch())
 		{
 			g.apiKeyRoute(tenantByID, http.MethodGet, "",
@@ -94,12 +92,22 @@ func RegisterTenantRoutes(
 				apiKeyPlatform(types.APIKeyCapabilitySystemTenantsManage), g.Owner(), handler.UpdateTenant)
 			g.apiKeyRoute(tenantByID, http.MethodDelete, "",
 				apiKeyPlatform(types.APIKeyCapabilitySystemTenantsManage), g.Owner(), handler.DeleteTenant)
-			tenantByID.GET("/api-keys", g.Owner(), handler.ListAPIKeys)
-			tenantByID.POST("/api-keys", g.Owner(), handler.CreateAPIKey)
+			g.apiKeyRoute(tenantByID, http.MethodGet, "/api-keys",
+				apiKeyPlatform(types.APIKeyCapabilitySystemTenantsRead, types.APIKeyCapabilitySystemTenantsManage),
+				g.Owner(), handler.ListAPIKeys)
+			g.apiKeyRoute(tenantByID, http.MethodPost, "/api-keys",
+				apiKeyPlatform(types.APIKeyCapabilitySystemTenantsManage),
+				g.Owner(), handler.CreateAPIKey)
 			tenantByID.PUT("/api-keys/:key_id", g.Owner(), handler.UpdateAPIKey)
-			tenantByID.DELETE("/api-keys/:key_id", g.Owner(), handler.DeleteAPIKey)
-			tenantByID.GET("/api-principal-config", g.Owner(), handler.GetAPIPrincipalConfig)
-			tenantByID.PUT("/api-principal-config", g.Owner(), handler.UpdateAPIPrincipalConfig)
+			g.apiKeyRoute(tenantByID, http.MethodDelete, "/api-keys/:key_id",
+				apiKeyPlatform(types.APIKeyCapabilitySystemTenantsManage),
+				g.Owner(), handler.DeleteAPIKey)
+			g.apiKeyRoute(tenantByID, http.MethodGet, "/api-principal-config",
+				apiKeyPlatform(types.APIKeyCapabilitySystemTenantsRead, types.APIKeyCapabilitySystemTenantsManage),
+				g.Owner(), handler.GetAPIPrincipalConfig)
+			g.apiKeyRoute(tenantByID, http.MethodPut, "/api-principal-config",
+				apiKeyPlatform(types.APIKeyCapabilitySystemTenantsManage),
+				g.Owner(), handler.UpdateAPIPrincipalConfig)
 			tenantByID.POST("/api-principal-test-token", g.Owner(), handler.CreateAPIPrincipalTestToken)
 
 			// Tenant member management (PR 3 of #1303). Listing is
@@ -146,6 +154,18 @@ func RegisterTenantRoutes(
 			}
 		}
 	}
+}
+
+func RegisterExternalTenantRoutes(
+	r *gin.RouterGroup,
+	tenantHandler *handler.TenantHandler,
+	g *rbacGuards,
+) {
+	g.apiKeyRoute(r, http.MethodPut, "/system/admin/external-tenants/:external_ref",
+		apiKeyPlatform(types.APIKeyCapabilitySystemTenantsManage), middleware.RequirePlatformAPIKey(), tenantHandler.PutExternalTenant)
+	g.apiKeyRoute(r, http.MethodPut,
+		"/system/admin/external-tenants/:external_ref/api-keys/:external_credential_ref",
+		apiKeyPlatform(types.APIKeyCapabilitySystemTenantsManage), middleware.RequirePlatformAPIKey(), tenantHandler.PutExternalTenantAPIKey)
 }
 
 // RegisterMyInvitationRoutes wires the per-user invitation inbox under

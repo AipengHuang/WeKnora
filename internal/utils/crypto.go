@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -59,6 +60,70 @@ func EncryptAESGCM(plaintext string, key []byte) (string, error) {
 // SYSTEM_AES_KEY) and must propagate so the system fails loudly instead of
 // silently using ciphertext as a credential.
 var ErrEncryptedDataMissingKey = errors.New("encrypted data found but SYSTEM_AES_KEY is not set or has wrong length")
+
+// ErrStoredSecretEnvelopeRequired 表示数据库中的安全凭据不是精确的 enc:v1 信封。
+var ErrStoredSecretEnvelopeRequired = errors.New("stored secret must use an enc:v1 envelope")
+
+// ErrSecretEncryptionKeyUnavailable 表示安全凭据无法使用当前系统密钥写入。
+var ErrSecretEncryptionKeyUnavailable = errors.New("SYSTEM_AES_KEY is not set or has wrong length")
+
+type storedSecretEnvelope struct {
+	Version string
+	Payload string
+}
+
+// parseStoredSecretEnvelope 按固定字段解析信封，不接受前后空白、别名或额外字段。
+func parseStoredSecretEnvelope(value string) (storedSecretEnvelope, error) {
+	scheme, remainder, ok := strings.Cut(value, ":")
+	if !ok {
+		return storedSecretEnvelope{}, ErrStoredSecretEnvelopeRequired
+	}
+	version, payload, ok := strings.Cut(remainder, ":")
+	if !ok || scheme != "enc" || version != "v1" || payload == "" {
+		return storedSecretEnvelope{}, ErrStoredSecretEnvelopeRequired
+	}
+	if _, _, hasExtraField := strings.Cut(payload, ":"); hasExtraField {
+		return storedSecretEnvelope{}, ErrStoredSecretEnvelopeRequired
+	}
+	return storedSecretEnvelope{Version: version, Payload: payload}, nil
+}
+
+// DecryptEncryptedStoredSecret 只读取空值或精确的 enc:v1 密文信封。
+func DecryptEncryptedStoredSecret(stored string) (string, error) {
+	if stored == "" {
+		return "", nil
+	}
+	if _, err := parseStoredSecretEnvelope(stored); err != nil {
+		return "", fmt.Errorf("parse stored secret envelope: %w", err)
+	}
+	key := GetAESKey()
+	if key == nil {
+		return "", ErrEncryptedDataMissingKey
+	}
+	return DecryptAESGCM(stored, key)
+}
+
+// EncryptStoredSecret 加密并立即验证安全凭据，禁止明文或畸形信封进入数据库。
+func EncryptStoredSecret(plaintext string) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
+	key := GetAESKey()
+	if key == nil {
+		return "", ErrSecretEncryptionKeyUnavailable
+	}
+	encrypted, err := EncryptAESGCM(plaintext, key)
+	if err != nil {
+		return "", err
+	}
+	if _, err := parseStoredSecretEnvelope(encrypted); err != nil {
+		return "", err
+	}
+	if _, err := DecryptAESGCM(encrypted, key); err != nil {
+		return "", err
+	}
+	return encrypted, nil
+}
 
 // DecryptAESGCM decrypts an AES-256-GCM encrypted string.
 // If the string lacks the enc:v1: prefix, it's treated as legacy plaintext and returned as-is.

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
+	"net/url"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -17,6 +17,7 @@ import (
 const (
 	// AliyunMultimodalEmbeddingEndpoint 阿里云 DashScope 多模态 Embedding API 端点
 	AliyunMultimodalEmbeddingEndpoint = "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+	aliyunTextEmbeddingBasePath       = "/compatible-mode/v1"
 )
 
 // AliyunEmbedder implements text vectorization using Aliyun DashScope multimodal embedding API
@@ -92,14 +93,7 @@ func NewAliyunEmbedder(apiKey, baseURL, modelName string,
 	truncatePromptTokens int, dimensions int, modelID string, pooler EmbedderPooler,
 ) (*AliyunEmbedder, error) {
 	if baseURL == "" {
-		baseURL = "https://dashscope.aliyuncs.com"
-	}
-
-	// Remove trailing slash and any existing path suffix
-	baseURL = strings.TrimRight(baseURL, "/")
-	// If baseURL contains /compatible-mode/v1, strip it for multimodal API
-	if strings.Contains(baseURL, "/compatible-mode/v1") {
-		baseURL = strings.Replace(baseURL, "/compatible-mode/v1", "", 1)
+		return nil, fmt.Errorf("base URL is required")
 	}
 
 	if modelName == "" {
@@ -115,6 +109,9 @@ func NewAliyunEmbedder(apiKey, baseURL, modelName string,
 	if err := validateEmbeddingBaseURL(baseURL); err != nil {
 		return nil, err
 	}
+	if err := validateAliyunEmbeddingBaseURL(baseURL, true); err != nil {
+		return nil, err
+	}
 
 	return &AliyunEmbedder{
 		apiKey:               apiKey,
@@ -128,6 +125,27 @@ func NewAliyunEmbedder(apiKey, baseURL, modelName string,
 		timeout:              timeout,
 		maxRetries:           3,
 	}, nil
+}
+
+// validateAliyunEmbeddingBaseURL 要求文本和多模态协议使用各自的精确路径。
+func validateAliyunEmbeddingBaseURL(baseURL string, supportsVision bool) error {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Errorf("parse Aliyun embedding base URL: %w", err)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("Aliyun embedding base URL cannot contain a query or fragment")
+	}
+	if supportsVision {
+		if parsed.Path != "" {
+			return fmt.Errorf("Aliyun multimodal embedding requires a native service root URL without a path")
+		}
+		return nil
+	}
+	if parsed.Path != aliyunTextEmbeddingBasePath {
+		return fmt.Errorf("Aliyun text embedding requires the exact %s base path", aliyunTextEmbeddingBasePath)
+	}
+	return nil
 }
 
 // Embed converts text to vector

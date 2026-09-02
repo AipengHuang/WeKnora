@@ -41,6 +41,7 @@ func (s *stubSessionServiceForArtifacts) GetSession(ctx context.Context, id stri
 type stubMessageServiceForArtifacts struct {
 	interfaces.MessageService
 	getMessage         func(ctx context.Context, sessionID, id string) (*types.Message, error)
+	getMessages        func(ctx context.Context, sessionID string, page, pageSize int) ([]*types.Message, error)
 	getSessionArtifact func(ctx context.Context, sessionID string) (types.MessageArtifacts, error)
 }
 
@@ -53,6 +54,12 @@ func (s *stubMessageServiceForArtifacts) GetSessionArtifacts(ctx context.Context
 		return types.MessageArtifacts{}, nil
 	}
 	return s.getSessionArtifact(ctx, sessionID)
+}
+
+func (s *stubMessageServiceForArtifacts) GetMessagesBySession(
+	ctx context.Context, sessionID string, page, pageSize int,
+) ([]*types.Message, error) {
+	return s.getMessages(ctx, sessionID, page, pageSize)
 }
 
 // fakeArtifactFileService serves canned bytes for a single URL.
@@ -229,10 +236,30 @@ func TestListSessionArtifacts_StripsURL(t *testing.T) {
 			},
 		},
 		messageService: &stubMessageServiceForArtifacts{
-			getSessionArtifact: func(_ context.Context, _ string) (types.MessageArtifacts, error) {
-				return types.MessageArtifacts{
-					{URL: "fake://internal/1", FileName: "a.txt", FileSize: 1, CreatedAt: time.Now()},
-				}, nil
+			getMessages: func(_ context.Context, _ string, page, pageSize int) ([]*types.Message, error) {
+				if pageSize != 100 {
+					t.Fatalf("unexpected page size: %d", pageSize)
+				}
+				if page == 1 {
+					messages := make([]*types.Message, pageSize)
+					for index := range messages {
+						messages[index] = &types.Message{}
+					}
+					return messages, nil
+				}
+				if page != 2 {
+					t.Fatalf("unexpected page: %d", page)
+				}
+				return []*types.Message{{
+					ID: "message-1",
+					Artifacts: types.MessageArtifacts{{
+						URL:        "fake://internal/1",
+						ToolCallID: "call-1",
+						FileName:   "a.txt",
+						FileSize:   1,
+						CreatedAt:  time.Now(),
+					}},
+				}}, nil
 			},
 		},
 	}
@@ -251,6 +278,10 @@ func TestListSessionArtifacts_StripsURL(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "a.txt") {
 		t.Fatalf("response body missing file name: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"message_id":"message-1"`) ||
+		!strings.Contains(w.Body.String(), `"tool_call_id":"call-1"`) {
+		t.Fatalf("response body missing exact artifact identity: %s", w.Body.String())
 	}
 }
 

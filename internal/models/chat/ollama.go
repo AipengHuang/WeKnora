@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,16 +32,21 @@ func NewOllamaChat(config *ChatConfig, ollamaService *ollama.OllamaService) (*Ol
 }
 
 // convertMessages 转换消息格式为Ollama API格式
-func (c *OllamaChat) convertMessages(messages []Message) []ollamaapi.Message {
+func (c *OllamaChat) convertMessages(messages []Message) ([]ollamaapi.Message, error) {
 	ollamaMessages := make([]ollamaapi.Message, 0, len(messages))
 	for _, msg := range messages {
+		toolCalls, err := c.toolCallFrom(msg.ToolCalls)
+		if err != nil {
+			return nil, err
+		}
 		msgOllama := ollamaapi.Message{
 			Role:      msg.Role,
 			Content:   msg.Content,
-			ToolCalls: c.toolCallFrom(msg.ToolCalls),
+			ToolCalls: toolCalls,
 		}
 		if msg.Role == "tool" {
 			msgOllama.ToolName = msg.Name
+			msgOllama.ToolCallID = msg.ToolCallID
 		}
 		if len(msg.Images) > 0 && msg.Role == "user" {
 			for _, imgURL := range msg.Images {
@@ -53,7 +57,7 @@ func (c *OllamaChat) convertMessages(messages []Message) []ollamaapi.Message {
 		}
 		ollamaMessages = append(ollamaMessages, msgOllama)
 	}
-	return ollamaMessages
+	return ollamaMessages, nil
 }
 
 // resolveImageForOllama resolves an image URL into raw bytes for Ollama.
@@ -85,14 +89,23 @@ func resolveImageForOllama(imageURL string) ollamaapi.ImageData {
 }
 
 // buildChatRequest 构建聊天请求参数
-func (c *OllamaChat) buildChatRequest(messages []Message, opts *ChatOptions, isStream bool) *ollamaapi.ChatRequest {
+func (c *OllamaChat) buildChatRequest(
+	messages []Message,
+	opts *ChatOptions,
+	isStream bool,
+) (*ollamaapi.ChatRequest, error) {
+	ollamaMessages, err := c.convertMessages(messages)
+	if err != nil {
+		return nil, err
+	}
+
 	// 设置流式标志
 	streamFlag := isStream
 
 	// 构建请求参数
 	chatReq := &ollamaapi.ChatRequest{
 		Model:    c.modelName,
-		Messages: c.convertMessages(messages),
+		Messages: ollamaMessages,
 		Stream:   &streamFlag,
 		Options:  make(map[string]interface{}),
 	}
@@ -115,11 +128,15 @@ func (c *OllamaChat) buildChatRequest(messages []Message, opts *ChatOptions, isS
 			chatReq.Format = opts.Format
 		}
 		if len(opts.Tools) > 0 {
-			chatReq.Tools = c.toolFrom(opts.Tools)
+			tools, err := c.toolFrom(opts.Tools)
+			if err != nil {
+				return nil, err
+			}
+			chatReq.Tools = tools
 		}
 	}
 
-	return chatReq
+	return chatReq, nil
 }
 
 // Chat 进行非流式聊天
@@ -130,23 +147,26 @@ func (c *OllamaChat) Chat(ctx context.Context, messages []Message, opts *ChatOpt
 	}
 
 	// 构建请求参数
-	chatReq := c.buildChatRequest(messages, opts, false)
-
+	chatReq, err := c.buildChatRequest(messages, opts, false)
+	if err != nil {
+		return nil, err
+	}
 	// 记录请求日志
-	logger.GetLogger(ctx).Infof("发送聊天请求到模型 %s", c.modelName)
+	logger.GetLogger(ctx).Infof("Sending chat request to model %s", c.modelName)
 
 	var responseContent string
+	var reasoningContent string
 	var toolCalls []types.LLMToolCall
 	var promptTokens, completionTokens int
 
 	// 使用 Ollama 客户端发送请求
-	err := c.ollamaService.Chat(ctx, chatReq, func(resp ollamaapi.ChatResponse) error {
-		responseContent = resp.Message.Content
-		// 当 Content 为空但 Thinking 有内容时（如推理模型未正确配置 thinking 参数），使用 Thinking 作为兜底
-		if responseContent == "" && resp.Message.Thinking != "" {
-			responseContent = resp.Message.Thinking
+	err = c.ollamaService.Chat(ctx, chatReq, func(resp ollamaapi.ChatResponse) error {
+		responseContent, reasoningContent = ollamaMessageText(resp.Message)
+		converted, err := c.toolCallTo(resp.Message.ToolCalls)
+		if err != nil {
+			return err
 		}
-		toolCalls = c.toolCallTo(resp.Message.ToolCalls)
+		toolCalls = converted
 
 		// 获取token计数
 		if resp.EvalCount > 0 {
@@ -157,7 +177,7 @@ func (c *OllamaChat) Chat(ctx context.Context, messages []Message, opts *ChatOpt
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("聊天请求失败: %w", err)
+		return nil, fmt.Errorf("Ollama chat request failed: %w", err)
 	}
 
 	usage := types.TokenUsage{
@@ -169,9 +189,10 @@ func (c *OllamaChat) Chat(ctx context.Context, messages []Message, opts *ChatOpt
 	logUsage(ctx, c.modelName, &usage)
 
 	return &types.ChatResponse{
-		Content:   responseContent,
-		ToolCalls: toolCalls,
-		Usage:     usage,
+		Content:          responseContent,
+		ReasoningContent: reasoningContent,
+		ToolCalls:        toolCalls,
+		Usage:            usage,
 	}, nil
 }
 
@@ -187,10 +208,12 @@ func (c *OllamaChat) ChatStream(
 	}
 
 	// 构建请求参数
-	chatReq := c.buildChatRequest(messages, opts, true)
-
+	chatReq, err := c.buildChatRequest(messages, opts, true)
+	if err != nil {
+		return nil, err
+	}
 	// 记录请求日志
-	logger.GetLogger(ctx).Infof("发送流式聊天请求到模型 %s", c.modelName)
+	logger.GetLogger(ctx).Infof("Sending streaming chat request to model %s", c.modelName)
 
 	// 创建流式响应通道
 	streamChan := make(chan types.StreamResponse)
@@ -217,9 +240,13 @@ func (c *OllamaChat) ChatStream(
 			}
 
 			if len(resp.Message.ToolCalls) > 0 {
+				toolCalls, err := c.toolCallTo(resp.Message.ToolCalls)
+				if err != nil {
+					return err
+				}
 				streamChan <- types.StreamResponse{
 					ResponseType: types.ResponseTypeToolCall,
-					ToolCalls:    c.toolCallTo(resp.Message.ToolCalls),
+					ToolCalls:    toolCalls,
 					Done:         false,
 				}
 
@@ -245,7 +272,7 @@ func (c *OllamaChat) ChatStream(
 								Done:         false,
 								Data: map[string]interface{}{
 									"source":       "thinking_tool",
-									"tool_call_id": tooli2s(tc.Function.Index),
+									"tool_call_id": tc.ID,
 								},
 							}
 						}
@@ -274,7 +301,7 @@ func (c *OllamaChat) ChatStream(
 			return nil
 		})
 		if err != nil {
-			logger.GetLogger(ctx).Errorf("流式聊天请求失败: %v", err)
+			logger.GetLogger(ctx).Errorf("Ollama streaming chat request failed: %v", err)
 			// 发送错误响应
 			streamChan <- types.StreamResponse{
 				ResponseType: types.ResponseTypeError,
@@ -289,7 +316,7 @@ func (c *OllamaChat) ChatStream(
 
 // 确保模型可用
 func (c *OllamaChat) ensureModelAvailable(ctx context.Context) error {
-	logger.GetLogger(ctx).Infof("确保模型 %s 可用", c.modelName)
+	logger.GetLogger(ctx).Infof("Ensuring model %s is available", c.modelName)
 	return c.ollamaService.EnsureModelAvailable(ctx, c.modelName)
 }
 
@@ -301,98 +328,4 @@ func (c *OllamaChat) GetModelName() string {
 // GetModelID 获取模型ID
 func (c *OllamaChat) GetModelID() string {
 	return c.modelID
-}
-
-// toolFrom 将本模块的 Tool 转换为 Ollama 的 Tool
-func (c *OllamaChat) toolFrom(tools []Tool) ollamaapi.Tools {
-	if len(tools) == 0 {
-		return nil
-	}
-	ollamaTools := make(ollamaapi.Tools, 0, len(tools))
-	for _, tool := range tools {
-		function := ollamaapi.ToolFunction{
-			Name:        tool.Function.Name,
-			Description: tool.Function.Description,
-		}
-		if len(tool.Function.Parameters) > 0 {
-			_ = json.Unmarshal(tool.Function.Parameters, &function.Parameters)
-		}
-
-		ollamaTools = append(ollamaTools, ollamaapi.Tool{
-			Type:     tool.Type,
-			Function: function,
-		})
-	}
-	return ollamaTools
-}
-
-// toolTo 将 Ollama 的 Tool 转换为本模块的 Tool
-func (c *OllamaChat) toolTo(ollamaTools ollamaapi.Tools) []Tool {
-	if len(ollamaTools) == 0 {
-		return nil
-	}
-	tools := make([]Tool, 0, len(ollamaTools))
-	for _, tool := range ollamaTools {
-		paramsBytes, _ := json.Marshal(tool.Function.Parameters)
-		tools = append(tools, Tool{
-			Type: tool.Type,
-			Function: FunctionDef{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				Parameters:  paramsBytes,
-			},
-		})
-	}
-	return tools
-}
-
-// toolCallFrom 将本模块的 ToolCall 转换为 Ollama 的 ToolCall
-func (c *OllamaChat) toolCallFrom(toolCalls []ToolCall) []ollamaapi.ToolCall {
-	if len(toolCalls) == 0 {
-		return nil
-	}
-	ollamaToolCalls := make([]ollamaapi.ToolCall, 0, len(toolCalls))
-	for _, tc := range toolCalls {
-		args := ollamaapi.NewToolCallFunctionArguments()
-		if tc.Function.Arguments != "" {
-			_ = args.UnmarshalJSON([]byte(tc.Function.Arguments))
-		}
-		ollamaToolCalls = append(ollamaToolCalls, ollamaapi.ToolCall{
-			Function: ollamaapi.ToolCallFunction{
-				Index:     tools2i(tc.ID),
-				Name:      tc.Function.Name,
-				Arguments: args,
-			},
-		})
-	}
-	return ollamaToolCalls
-}
-
-// toolCallTo 将 Ollama 的 ToolCall 转换为本模块的 ToolCall
-func (c *OllamaChat) toolCallTo(ollamaToolCalls []ollamaapi.ToolCall) []types.LLMToolCall {
-	if len(ollamaToolCalls) == 0 {
-		return nil
-	}
-	toolCalls := make([]types.LLMToolCall, 0, len(ollamaToolCalls))
-	for _, tc := range ollamaToolCalls {
-		argsBytes, _ := json.Marshal(tc.Function.Arguments)
-		toolCalls = append(toolCalls, types.LLMToolCall{
-			ID:   tooli2s(tc.Function.Index),
-			Type: "function",
-			Function: types.FunctionCall{
-				Name:      tc.Function.Name,
-				Arguments: string(argsBytes),
-			},
-		})
-	}
-	return toolCalls
-}
-
-func tooli2s(i int) string {
-	return strconv.Itoa(i)
-}
-
-func tools2i(s string) int {
-	i, _ := strconv.Atoi(s)
-	return i
 }

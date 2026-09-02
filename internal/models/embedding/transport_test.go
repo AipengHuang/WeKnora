@@ -61,12 +61,25 @@ func TestNewOpenAIEmbedder_RejectsPrivateBaseURL(t *testing.T) {
 		"test-key",
 		"http://169.254.169.254/latest/meta-data",
 		"text-embedding-3-small",
-		511,
 		256,
 		"model-id",
 		nil,
 	)
 	if err == nil {
 		t.Fatal("expected SSRF rejection for link-local metadata URL")
+	}
+}
+
+func TestNewOpenAIEmbedderRequiresBaseURL(t *testing.T) {
+	_, err := NewOpenAIEmbedder(
+		"test-key",
+		"",
+		"text-embedding-3-small",
+		256,
+		"model-id",
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected missing base URL to fail")
 	}
 }

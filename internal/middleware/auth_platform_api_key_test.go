@@ -16,11 +16,14 @@ func TestPlatformTenantOptionalAPIs(t *testing.T) {
 		want   bool
 	}{
 		{http.MethodGet, "/api/v1/system/admin/settings", true},
+		{http.MethodPut, "/api/v1/system/admin/external-tenants/:external_ref", true},
 		{http.MethodGet, "/api/v1/tenants/all", true},
 		{http.MethodGet, "/api/v1/tenants/search", true},
 		{http.MethodPost, "/api/v1/tenants", true},
 		{http.MethodGet, "/api/v1/knowledge-bases", false},
 		{http.MethodGet, "/api/v1/tenants", false},
+		{http.MethodGet, "/api/v1/system/admin-foo", false},
+		{http.MethodGet, "/api/v1/system/admin/settings/", false},
 	}
 	for _, tc := range cases {
 		if got := isPlatformTenantOptionalAPI(tc.path, tc.method); got != tc.want {

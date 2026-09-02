@@ -12,9 +12,10 @@ func TestConfigFromModel(t *testing.T) {
 		Name:   "text-embedding-3-small",
 		Source: types.ModelSourceRemote,
 		Parameters: types.ModelParameters{
-			BaseURL:  "https://api.example.com/v1",
-			APIKey:   "sk-xxx",
-			Provider: "openai",
+			BaseURL:        "https://api.example.com/v1",
+			APIKey:         "sk-xxx",
+			Provider:       "openai",
+			SupportsVision: true,
 			EmbeddingParameters: types.EmbeddingParameters{
 				Dimension:                 1536,
 				TruncatePromptTokens:      512,
@@ -34,6 +35,9 @@ func TestConfigFromModel(t *testing.T) {
 	}
 	if !cfg.SupportsDimensionOverride {
 		t.Errorf("SupportsDimensionOverride not propagated: %+v", cfg)
+	}
+	if !cfg.SupportsVision {
+		t.Errorf("SupportsVision not propagated: %+v", cfg)
 	}
 	if cfg.CustomHeaders["X-Gateway"] != "g1" {
 		t.Errorf("CustomHeaders not propagated: %+v", cfg.CustomHeaders)

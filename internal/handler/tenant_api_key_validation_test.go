@@ -36,6 +36,28 @@ func TestValidateTenantAPIKeyRequestAcceptsScopedKeyWithCapability(t *testing.T)
 	}
 }
 
+func TestValidateTenantAPIKeyRequestRejectsNonProtocolScopedCapabilities(t *testing.T) {
+	tests := []struct {
+		name         string
+		capabilities []string
+	}{
+		{name: "unknown", capabilities: []string{"bogus"}},
+		{name: "whitespace alias", capabilities: []string{" chat"}},
+		{name: "case alias", capabilities: []string{"CHAT"}},
+		{name: "duplicate", capabilities: []string{"chat", "chat"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateTenantAPIKeyRequest(context.Background(), nil, 1, tenantAPIKeyCreateRequest{
+				Name: "invalid", Capabilities: test.capabilities,
+			})
+			if err == nil {
+				t.Fatal("validateTenantAPIKeyRequest returned nil error")
+			}
+		})
+	}
+}
+
 // TestValidateTenantAPIKeyKnowledgeBaseOwnership 验证知识库白名单的租户边界。
 // 输入同租户、其他租户和不存在的知识库 ID；仅同租户 ID 应通过。
 func TestValidateTenantAPIKeyKnowledgeBaseOwnership(t *testing.T) {

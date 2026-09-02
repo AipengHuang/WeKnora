@@ -208,7 +208,7 @@ func TestArtifactCollector_CollectsNewFiles(t *testing.T) {
 	fs := &fakeFileService{}
 	c := newTestCollector(src, store, fs, 1<<20)
 
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -296,7 +296,7 @@ func TestArtifactCollector_SkipsAlreadyKnown(t *testing.T) {
 	fs := &fakeFileService{}
 	c := newTestCollector(src, store, fs, 1<<20)
 
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestArtifactCollector_ReattachesOnMtimeChange(t *testing.T) {
 	fs := &fakeFileService{}
 	c := newTestCollector(src, store, fs, 1<<20)
 
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -360,7 +360,7 @@ func TestArtifactCollector_SkipsOversize(t *testing.T) {
 	fs := &fakeFileService{}
 	c := newTestCollector(src, &fakeStore{}, fs, 100)
 
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -389,7 +389,7 @@ func TestArtifactCollector_SkipsOversizeAfterRead(t *testing.T) {
 	fs := &fakeFileService{}
 	c := newTestCollector(src, &fakeStore{}, fs, 100)
 
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -402,7 +402,7 @@ func TestArtifactCollector_EmptyWhenNoEntries(t *testing.T) {
 	ctx := context.Background()
 	src := &fakeSandboxSource{}
 	c := newTestCollector(src, &fakeStore{}, &fakeFileService{}, 1<<20)
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -417,7 +417,7 @@ func TestArtifactCollector_EmptyWhenNoSessionID(t *testing.T) {
 	ctx := context.Background()
 	src := &fakeSandboxSource{}
 	c := newTestCollector(src, &fakeStore{}, &fakeFileService{}, 1<<20)
-	got, err := c.Collect(ctx, "", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -433,7 +433,7 @@ func TestArtifactCollector_ListErrorDegrades(t *testing.T) {
 	ctx := context.Background()
 	src := &fakeSandboxSource{listErr: stderrors.New("envd timeout")}
 	c := newTestCollector(src, &fakeStore{}, &fakeFileService{}, 1<<20)
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v (should degrade gracefully)", err)
 	}
@@ -463,7 +463,7 @@ func TestArtifactCollector_UploadFailureIsPerFile(t *testing.T) {
 	fs := &fakeFileService{saveErr: stderrors.New("s3 dead")}
 	c := newTestCollector(src, &fakeStore{}, fs, 1<<20)
 
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v (want best-effort)", err)
 	}
@@ -489,7 +489,7 @@ func TestArtifactCollector_FiltersDirectories(t *testing.T) {
 		},
 	}
 	c := newTestCollector(src, &fakeStore{}, &fakeFileService{}, 1<<20)
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 42, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -518,7 +518,7 @@ func TestArtifactCollector_BindsResourceToMessage(t *testing.T) {
 	cat := &fakeCatalog{}
 	c := NewArtifactCollector(src, fs, &fakeStore{}, cat, ArtifactCollectorConfig{MaxFileBytes: 1 << 20})
 
-	got, err := c.Collect(ctx, "sess-1", "msg-42", 7, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-42", 7, "call-42")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -551,7 +551,7 @@ func TestArtifactCollector_BindFailureDoesNotDropArtifact(t *testing.T) {
 	cat := &fakeCatalog{bindErr: stderrors.New("db down")}
 	c := NewArtifactCollector(src, fs, &fakeStore{}, cat, ArtifactCollectorConfig{MaxFileBytes: 1 << 20})
 
-	got, err := c.Collect(ctx, "sess-1", "msg-1", 7, "/workspace/output")
+	got, err := c.Collect(ctx, "sess-1", "msg-1", 7, "call-1")
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}

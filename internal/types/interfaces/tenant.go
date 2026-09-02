@@ -9,6 +9,7 @@ import (
 
 // TenantService defines the tenant service interface
 type TenantService interface {
+	ExternalTenantService
 	// CreateTenant creates a tenant
 	CreateTenant(ctx context.Context, tenant *types.Tenant) (*types.Tenant, error)
 	// GetTenantByID gets a tenant by ID
@@ -42,6 +43,7 @@ type TenantService interface {
 
 // TenantRepository defines the tenant repository interface
 type TenantRepository interface {
+	ExternalTenantRepository
 	// CreateTenant creates a tenant
 	CreateTenant(ctx context.Context, tenant *types.Tenant) error
 	// GetTenantByID gets a tenant by ID
@@ -77,6 +79,19 @@ type TenantAPIKeyCreateResult struct {
 	Token  string
 }
 
+type ExternalTenantAPIKeyPutRequest struct {
+	TenantRef     types.ExternalTenantRef
+	CredentialRef types.ExternalTenantCredentialRef
+	Name          string
+	Capabilities  []types.APIKeyCapability
+}
+
+type ExternalTenantAPIKeyPutResult struct {
+	APIKey  *types.TenantAPIKey
+	Token   string
+	Created bool
+}
+
 // TenantAPIKeyUpdateRequest 修改已创建租户 API Key 的可配置属性。
 // 配置语义与创建接口一致：FullAccess 为 true 时忽略细粒度能力和知识库范围。
 type TenantAPIKeyUpdateRequest struct {
@@ -91,6 +106,12 @@ type TenantAPIKeyUpdateRequest struct {
 
 type TenantAPIKeyRepository interface {
 	CreateAPIKey(ctx context.Context, key *types.TenantAPIKey) error
+	PutExternalTenantAPIKey(
+		ctx context.Context,
+		tenantRef types.ExternalTenantRef,
+		credentialRef types.ExternalTenantCredentialRef,
+		key *types.TenantAPIKey,
+	) (*types.TenantAPIKey, bool, error)
 	GetAPIKeyByHash(ctx context.Context, hash string) (*types.TenantAPIKey, error)
 	ListAPIKeys(ctx context.Context, tenantID uint64) ([]*types.TenantAPIKey, error)
 	ListPlatformAPIKeys(ctx context.Context) ([]*types.TenantAPIKey, error)
@@ -110,6 +131,10 @@ type TenantAPIKeyRepository interface {
 
 type TenantAPIKeyService interface {
 	CreateAPIKey(ctx context.Context, req TenantAPIKeyCreateRequest) (*TenantAPIKeyCreateResult, error)
+	PutExternalTenantAPIKey(
+		ctx context.Context,
+		req ExternalTenantAPIKeyPutRequest,
+	) (*ExternalTenantAPIKeyPutResult, error)
 	AuthenticateAPIKey(ctx context.Context, token string) (*types.TenantAPIKey, error)
 	ListAPIKeys(ctx context.Context, tenantID uint64) ([]*types.TenantAPIKey, error)
 	ListPlatformAPIKeys(ctx context.Context) ([]*types.TenantAPIKey, error)

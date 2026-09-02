@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,4 +33,14 @@ func TestExecuteSkillScriptDescriptionAcceptsWorkspacePaths(t *testing.T) {
 	assert.Contains(t, executeSkillScriptTool.Description(), "/workspace/input")
 	assert.Contains(t, executeSkillScriptTool.Description(), "install_deps.py")
 	assert.Contains(t, executeSkillScriptTool.Description(), ".skill-packages")
+}
+
+func TestExecuteSkillScriptInputRequiresArgumentArray(t *testing.T) {
+	var input ExecuteSkillScriptInput
+	err := json.Unmarshal([]byte(`{"skill_name":"proof","script_path":"scripts/run.py","args":"--flag"}`), &input)
+	require.Error(t, err)
+
+	err = json.Unmarshal([]byte(`{"skill_name":"proof","script_path":"scripts/run.py","args":["--flag"]}`), &input)
+	require.NoError(t, err)
+	require.Equal(t, []string{"--flag"}, input.Args)
 }

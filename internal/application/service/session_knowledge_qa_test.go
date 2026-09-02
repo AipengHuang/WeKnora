@@ -96,6 +96,10 @@ func (s *stubModelService) UpdateModel(context.Context, *types.Model) error {
 	return nil
 }
 
+func (s *stubModelService) SetDefaultModel(context.Context, string) (*types.Model, error) {
+	return nil, nil
+}
+
 func (s *stubModelService) DeleteModel(context.Context, string) error {
 	return nil
 }

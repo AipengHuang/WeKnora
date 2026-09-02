@@ -348,6 +348,8 @@ func StorageBackendFromEnvironment(tenantID uint64) *StorageBackend {
 		b.Config = StorageBackendConfig{Endpoint: os.Getenv("S3_ENDPOINT"), Region: os.Getenv("S3_REGION"), AccessKeyID: os.Getenv("S3_ACCESS_KEY"), SecretAccessKey: os.Getenv("S3_SECRET_KEY"), BucketName: os.Getenv("S3_BUCKET_NAME"), PathPrefix: os.Getenv("S3_PATH_PREFIX"), UseSSL: !strings.EqualFold(os.Getenv("S3_USE_SSL"), "false"), ForcePathStyle: strings.EqualFold(os.Getenv("S3_FORCE_PATH_STYLE"), "true")}
 	case "oss":
 		b.Config = StorageBackendConfig{Endpoint: os.Getenv("OSS_ENDPOINT"), Region: os.Getenv("OSS_REGION"), AccessKeyID: os.Getenv("OSS_ACCESS_KEY"), SecretAccessKey: os.Getenv("OSS_SECRET_KEY"), BucketName: os.Getenv("OSS_BUCKET_NAME"), PathPrefix: os.Getenv("OSS_PATH_PREFIX"), UseTempBucket: os.Getenv("OSS_TEMP_BUCKET_NAME") != "", TempBucketName: os.Getenv("OSS_TEMP_BUCKET_NAME"), TempRegion: os.Getenv("OSS_TEMP_REGION")}
+	case "ks3":
+		b.Config = StorageBackendConfig{Endpoint: os.Getenv("KS3_ENDPOINT"), Region: os.Getenv("KS3_REGION"), AccessKeyID: os.Getenv("KS3_ACCESS_KEY"), SecretAccessKey: os.Getenv("KS3_SECRET_KEY"), BucketName: os.Getenv("KS3_BUCKET_NAME"), PathPrefix: os.Getenv("KS3_PATH_PREFIX")}
 	case "obs":
 		b.Config = StorageBackendConfig{Endpoint: os.Getenv("OBS_ENDPOINT"), Region: os.Getenv("OBS_REGION"), AccessKeyID: os.Getenv("OBS_ACCESS_KEY"), SecretAccessKey: os.Getenv("OBS_SECRET_KEY"), BucketName: os.Getenv("OBS_BUCKET_NAME"), PathPrefix: os.Getenv("OBS_PATH_PREFIX"), UseSSL: !strings.EqualFold(os.Getenv("OBS_USE_SSL"), "false")}
 	default:

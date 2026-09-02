@@ -83,7 +83,7 @@ func TestExecuteScriptBlocksOnMissingRequiredEnv(t *testing.T) {
 		WithEnvResolver(resolver)
 	require.NoError(t, mgr.Initialize(context.Background()))
 
-	result, err := mgr.ExecuteScript(context.Background(), "web-search", "scripts/run.py", nil, "")
+	result, err := mgr.ExecuteScript(testToolCallContext("session-1"), "web-search", "scripts/run.py", nil, "")
 
 	require.Nil(t, result)
 	var missing *MissingSkillEnvError
@@ -103,7 +103,7 @@ func TestExecuteScriptPropagatesResolverError(t *testing.T) {
 		WithEnvResolver(&stubEnvResolver{err: boom})
 	require.NoError(t, mgr.Initialize(context.Background()))
 
-	_, err := mgr.ExecuteScript(context.Background(), "web-search", "scripts/run.py", nil, "")
+	_, err := mgr.ExecuteScript(testToolCallContext("session-1"), "web-search", "scripts/run.py", nil, "")
 
 	require.ErrorIs(t, err, boom)
 	require.Zero(t, sandboxMgr.calls)
@@ -120,14 +120,14 @@ func TestExecuteScriptInjectsResolvedEnvOnceKeyedBySkillName(t *testing.T) {
 		WithEnvResolver(resolver)
 	require.NoError(t, mgr.Initialize(context.Background()))
 
-	_, err := mgr.ExecuteScript(context.Background(), "web-search", "scripts/run.py", nil, "")
+	_, err := mgr.ExecuteScript(testToolCallContext("session-1"), "web-search", "scripts/run.py", nil, "")
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"web-search"}, resolver.calls)
 	require.Equal(t, 1, sandboxMgr.calls)
 	require.NotNil(t, sandboxMgr.config)
 	require.Equal(t, "user-key", sandboxMgr.config.Env["TAVILY_API_KEY"])
-	require.Equal(t, "/workspace/output", sandboxMgr.config.Env[artifactOutputEnvVar])
+	require.Equal(t, testToolArtifactOutputDir(t), sandboxMgr.config.Env[artifactOutputEnvVar])
 }
 
 // Without a resolver the execution path must stay exactly as it was.
@@ -137,7 +137,7 @@ func TestExecuteScriptWithoutResolverInjectsNothingExtra(t *testing.T) {
 	mgr := NewManager(&ManagerConfig{SkillDirs: []string{dir}, Enabled: true}, sandboxMgr)
 	require.NoError(t, mgr.Initialize(context.Background()))
 
-	_, err := mgr.ExecuteScript(context.Background(), "web-search", "scripts/run.py", nil, "")
+	_, err := mgr.ExecuteScript(testToolCallContext("session-1"), "web-search", "scripts/run.py", nil, "")
 
 	require.NoError(t, err)
 	require.Equal(t, 1, sandboxMgr.calls)

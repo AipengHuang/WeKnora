@@ -3,7 +3,7 @@ package embedding
 import (
 	"context"
 	"fmt"
-	"strings"
+	"slices"
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/provider"
@@ -55,9 +55,10 @@ type Config struct {
 	MaxConcurrency int               `json:"max_concurrency"`
 	ExtraConfig    map[string]string `json:"extra_config"`
 	// CustomHeaders 允许在调用远程 API 时附加自定义 HTTP 请求头（类似 OpenAI Python SDK 的 extra_headers）。
-	CustomHeaders map[string]string `json:"custom_headers"`
-	AppID         string
-	AppSecret     string // 加密值，工厂函数调用方传入，使用前已解密
+	CustomHeaders  map[string]string `json:"custom_headers"`
+	SupportsVision bool
+	AppID          string
+	AppSecret      string // 加密值，工厂函数调用方传入，使用前已解密
 }
 
 // ConfigFromModel 根据 types.Model 构造 embedding.Config。
@@ -80,6 +81,7 @@ func ConfigFromModel(m *types.Model, appID, appSecret string) Config {
 		MaxConcurrency:            m.Parameters.MaxConcurrency,
 		ExtraConfig:               m.Parameters.ExtraConfig,
 		CustomHeaders:             m.Parameters.CustomHeaders,
+		SupportsVision:            m.Parameters.SupportsVision,
 		AppID:                     appID,
 		AppSecret:                 appSecret,
 	}
@@ -110,40 +112,22 @@ func NewEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.Oll
 func newEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.OllamaService) (Embedder, error) {
 	var embedder Embedder
 	var err error
-	switch strings.ToLower(string(config.Source)) {
-	case string(types.ModelSourceLocal):
+	switch config.Source {
+	case types.ModelSourceLocal:
 		embedder, err = NewOllamaEmbedder(config.BaseURL,
 			config.ModelName, config.TruncatePromptTokens, config.Dimensions, config.ModelID, pooler, ollamaService)
 		return embedder, err
-	case string(types.ModelSourceRemote):
-		// Detect or use configured provider for routing
-		providerName := provider.ProviderName(config.Provider)
-		if providerName == "" {
-			providerName = provider.DetectProvider(config.BaseURL)
+	case types.ModelSourceRemote:
+		if err := ValidateRemoteEmbeddingConfig(config); err != nil {
+			return nil, err
 		}
+		providerName := provider.ProviderName(config.Provider)
 
-		// Route to provider-specific embedders
 		switch providerName {
 		case provider.ProviderAliyun:
-			// 检查是否是多模态嵌入模型
-			// 多模态模型: tongyi-embedding-vision-*, multimodal-embedding-*
-			// tex-only模型: text-embedding-v1/v2/v3/v4 应该使用 OpenAI 兼容接口，否则响应格式不匹配、embedding 返回空数组
-			isMultimodalModel := strings.Contains(strings.ToLower(config.ModelName), "vision") ||
-				strings.Contains(strings.ToLower(config.ModelName), "multimodal")
-
-			if isMultimodalModel {
-				// 多模态模型需要使用DashScope专用 API 端点
-				// 如果用户填写了 OpenAI 兼容模式的 URL，自动修正为多模态 API 的baseURL
-				baseURL := config.BaseURL
-				if baseURL == "" {
-					baseURL = "https://dashscope.aliyuncs.com"
-				} else if strings.Contains(baseURL, "/compatible-mode/") {
-					// 移除 compatible-mode 路径，AliyunEmbedder 会自动添加多模态端点
-					baseURL = strings.Replace(baseURL, "/compatible-mode/v1", "", 1)
-					baseURL = strings.Replace(baseURL, "/compatible-mode", "", 1)
-				}
+			if config.SupportsVision {
 				aliyunEmb, aErr := NewAliyunEmbedder(config.APIKey,
-					baseURL,
+					config.BaseURL,
 					config.ModelName,
 					config.TruncatePromptTokens,
 					config.Dimensions,
@@ -154,14 +138,9 @@ func newEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.Oll
 				}
 				embedder, err = aliyunEmb, aErr
 			} else {
-				baseURL := config.BaseURL
-				if baseURL == "" || !strings.Contains(baseURL, "/compatible-mode/") {
-					baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-				}
 				openaiEmb, oErr := NewOpenAIEmbedder(config.APIKey,
-					baseURL,
+					config.BaseURL,
 					config.ModelName,
-					config.TruncatePromptTokens,
 					config.Dimensions,
 					config.ModelID,
 					pooler)
@@ -261,11 +240,10 @@ func newEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.Oll
 			embedder, err = NewWeKnoraCloudEmbedder(config)
 			return embedder, err
 		default:
-			// Use OpenAI-compatible embedder for other providers
+			// 其余已声明支持 Embedding 的 Provider 使用 OpenAI 标准接口。
 			openaiEmb, oErr := NewOpenAIEmbedder(config.APIKey,
 				config.BaseURL,
 				config.ModelName,
-				config.TruncatePromptTokens,
 				config.Dimensions,
 				config.ModelID,
 				pooler)
@@ -278,4 +256,23 @@ func newEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.Oll
 	default:
 		return nil, fmt.Errorf("unsupported embedder source: %s", config.Source)
 	}
+}
+
+// ValidateRemoteEmbeddingConfig 在保存和运行前执行同一套显式协议校验。
+func ValidateRemoteEmbeddingConfig(config Config) error {
+	providerName := provider.ProviderName(config.Provider)
+	if providerName == "" {
+		return fmt.Errorf("provider is required for remote embedding models")
+	}
+	registeredProvider, ok := provider.Get(providerName)
+	if !ok || !slices.Contains(registeredProvider.Info().ModelTypes, types.ModelTypeEmbedding) {
+		return fmt.Errorf("provider %q does not support embedding models", providerName)
+	}
+	if config.BaseURL == "" {
+		return fmt.Errorf("base URL is required for remote embedding provider %q", providerName)
+	}
+	if providerName == provider.ProviderAliyun {
+		return validateAliyunEmbeddingBaseURL(config.BaseURL, config.SupportsVision)
+	}
+	return nil
 }

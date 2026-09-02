@@ -26,7 +26,8 @@ func (r *tenantAPIKeyRepository) CreateAPIKey(ctx context.Context, key *types.Te
 
 func (r *tenantAPIKeyRepository) GetAPIKeyByHash(ctx context.Context, hash string) (*types.TenantAPIKey, error) {
 	var key types.TenantAPIKey
-	err := r.db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).
+	// 认证查询也执行 AfterFind，确保明文或损坏的安全凭据不能继续认证。
+	err := r.db.WithContext(ctx).
 		Where("key_hash = ?", hash).
 		First(&key).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -35,6 +36,8 @@ func (r *tenantAPIKeyRepository) GetAPIKeyByHash(ctx context.Context, hash strin
 	if err != nil {
 		return nil, err
 	}
+	// 哈希认证不使用可复用凭据，严格校验完成后立即清除。
+	key.APIKey = ""
 	return &key, nil
 }
 

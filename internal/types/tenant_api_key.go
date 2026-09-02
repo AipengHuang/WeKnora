@@ -11,14 +11,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// TenantAPIKey is a revocable machine credential. Tenant-scoped and platform
-// keys intentionally share one table; platform keys have tenant_id=NULL and
-// choose a target workspace per request. KeyHash is used for authentication
-// lookup; APIKey is stored encrypted when SYSTEM_AES_KEY is set.
+// TenantAPIKey 表示可撤销的机器凭证。租户级和平台级密钥共用同一张表；
+// 平台密钥使用空 tenant_id，并在每次请求中选择目标工作区。KeyHash 用于
+// 认证查询；APIKey 写入数据库前必须使用 SYSTEM_AES_KEY 加密。
 type TenantAPIKey struct {
 	ID               uint64          `json:"id" gorm:"primaryKey;autoIncrement"`
 	TenantID         *uint64         `json:"tenant_id,omitempty" gorm:"index"`
-	ScopeType        APIKeyScopeType `json:"scope_type" gorm:"type:varchar(16);not null;default:tenant;index"`
+	ExternalRef      *string         `json:"-" gorm:"column:external_ref;type:uuid;uniqueIndex"`
+	ScopeType        APIKeyScopeType `json:"scope_type" gorm:"type:varchar(16);not null;index"`
 	Name             string          `json:"name" gorm:"type:varchar(128);not null"`
 	KeyHash          string          `json:"-" gorm:"type:varchar(64);not null;uniqueIndex"`
 	APIKey           string          `json:"api_key" gorm:"column:api_key;type:text;not null;default:''"`
@@ -45,12 +45,11 @@ const (
 )
 
 func NormalizeAPIKeyScopeType(scope APIKeyScopeType) APIKeyScopeType {
-	switch APIKeyScopeType(strings.ToLower(strings.TrimSpace(string(scope)))) {
-	case APIKeyScopePlatform:
-		return APIKeyScopePlatform
-	default:
-		return APIKeyScopeTenant
+	parsed, err := ParseAPIKeyScopeType(scope)
+	if err != nil {
+		return ""
 	}
+	return parsed
 }
 
 func (k *TenantAPIKey) IsPlatform() bool {
@@ -116,6 +115,9 @@ const (
 	// APIKeyCapabilityManageMCPServices lets a key manage tenant MCP service
 	// definitions, credentials, tool policies, and per-principal OAuth state.
 	APIKeyCapabilityManageMCPServices APIKeyCapability = "manage_mcp_services"
+	// APIKeyCapabilityManageSandboxes 允许独立的运营凭据管理租户 Sandbox
+	// 配置和 Skill 镜像生命周期，不授予其他租户资源权限。
+	APIKeyCapabilityManageSandboxes APIKeyCapability = "manage_sandboxes"
 	// APIKeyCapabilityManageDataSources lets a key manage data-source
 	// connectors and sync jobs. KB scoping applies to data sources bound to a
 	// knowledge base.
@@ -164,100 +166,20 @@ const (
 	APIKeyCapabilitySystemAuditRead      APIKeyCapability = "system_audit_read"
 )
 
-// NormalizeAPIKeyCapability maps an input capability string to a known
-// capability, returning "" for anything unrecognised so callers can drop it.
-func NormalizeAPIKeyCapability(c APIKeyCapability) APIKeyCapability {
-	switch APIKeyCapability(strings.ToLower(strings.TrimSpace(string(c)))) {
-	case APIKeyCapabilityRetrieve:
-		return APIKeyCapabilityRetrieve
-	case APIKeyCapabilityChat:
-		return APIKeyCapabilityChat
-	case APIKeyCapabilityReadAgents:
-		return APIKeyCapabilityReadAgents
-	case APIKeyCapabilityIngest:
-		return APIKeyCapabilityIngest
-	case APIKeyCapabilityManageKnowledgeBases:
-		return APIKeyCapabilityManageKnowledgeBases
-	case APIKeyCapabilityManageAgents:
-		return APIKeyCapabilityManageAgents
-	case APIKeyCapabilityMessageHistory:
-		return APIKeyCapabilityMessageHistory
-	case APIKeyCapabilityManageModels:
-		return APIKeyCapabilityManageModels
-	case APIKeyCapabilityManageMCPServices:
-		return APIKeyCapabilityManageMCPServices
-	case APIKeyCapabilityManageDataSources:
-		return APIKeyCapabilityManageDataSources
-	case APIKeyCapabilityManageChannels:
-		return APIKeyCapabilityManageChannels
-	case APIKeyCapabilityManageVectorStores:
-		return APIKeyCapabilityManageVectorStores
-	case APIKeyCapabilityManageStorageBackends:
-		return APIKeyCapabilityManageStorageBackends
-	case APIKeyCapabilityManageWebSearch:
-		return APIKeyCapabilityManageWebSearch
-	case APIKeyCapabilityRunEvaluations:
-		return APIKeyCapabilityRunEvaluations
-	case APIKeyCapabilityManageMembers:
-		return APIKeyCapabilityManageMembers
-	case APIKeyCapabilityManageSpaces:
-		return APIKeyCapabilityManageSpaces
-	case APIKeyCapabilityManageTenantSettings:
-		return APIKeyCapabilityManageTenantSettings
-	case APIKeyCapabilitySystemTenantsRead:
-		return APIKeyCapabilitySystemTenantsRead
-	case APIKeyCapabilitySystemTenantsManage:
-		return APIKeyCapabilitySystemTenantsManage
-	case APIKeyCapabilitySystemSettingsRead:
-		return APIKeyCapabilitySystemSettingsRead
-	case APIKeyCapabilitySystemSettingsManage:
-		return APIKeyCapabilitySystemSettingsManage
-	case APIKeyCapabilitySystemRuntimeRead:
-		return APIKeyCapabilitySystemRuntimeRead
-	case APIKeyCapabilitySystemRuntimeManage:
-		return APIKeyCapabilitySystemRuntimeManage
-	case APIKeyCapabilitySystemAuditRead:
-		return APIKeyCapabilitySystemAuditRead
-	default:
-		return ""
-	}
-}
-
-// NormalizeAPIKeyCapabilities dedups and drops unknown capabilities.
-func NormalizeAPIKeyCapabilities(in StringArray) StringArray {
-	out := make(StringArray, 0, len(in))
-	seen := map[string]struct{}{}
-	for _, item := range in {
-		norm := NormalizeAPIKeyCapability(APIKeyCapability(item))
-		if norm == "" {
-			continue
-		}
-		s := string(norm)
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	return out
-}
-
 func (k *TenantAPIKey) BeforeSave(tx *gorm.DB) error {
-	if key := utils.GetAESKey(); key != nil && k.APIKey != "" {
-		encrypted, err := utils.EncryptAESGCM(k.APIKey, key)
-		if err != nil {
-			// Never fall through to storing the plaintext key: abort the
-			// write so the caller sees the failure instead of silently
-			// persisting an unencrypted secret.
-			return fmt.Errorf("encrypt tenant_api_keys.api_key (id=%d): %w", k.ID, err)
-		}
-		tx.Statement.SetColumn("api_key", encrypted)
+	if k.APIKey == "" {
+		return nil
 	}
+	encrypted, err := utils.EncryptStoredSecret(k.APIKey)
+	if err != nil {
+		return fmt.Errorf("encrypt tenant_api_keys.api_key (id=%d): %w", k.ID, err)
+	}
+	tx.Statement.SetColumn("api_key", encrypted)
 	return nil
 }
 
 func (k *TenantAPIKey) AfterFind(tx *gorm.DB) error {
-	decrypted, err := utils.DecryptStoredSecret(k.APIKey)
+	decrypted, err := utils.DecryptEncryptedStoredSecret(k.APIKey)
 	if err != nil {
 		return fmt.Errorf("decrypt tenant_api_keys.api_key (id=%d): %w", k.ID, err)
 	}
@@ -295,7 +217,7 @@ func (s TenantAPIKeyScope) Normalize() TenantAPIKeyScope {
 		ScopeType:        NormalizeAPIKeyScopeType(s.ScopeType),
 		FullAccess:       s.FullAccess,
 		KnowledgeBaseIDs: normalizeIDArray(s.KnowledgeBaseIDs),
-		Capabilities:     NormalizeAPIKeyCapabilities(s.Capabilities),
+		Capabilities:     append(StringArray(nil), s.Capabilities...),
 	}
 }
 
@@ -303,14 +225,14 @@ func (s TenantAPIKeyScope) IsPlatform() bool {
 	return NormalizeAPIKeyScopeType(s.ScopeType) == APIKeyScopePlatform
 }
 
-// HasCapability reports whether the scope carries the given additive grant.
+// HasCapability 仅按精确协议值判断能力，非法值不会获得授权。
 func (s TenantAPIKeyScope) HasCapability(c APIKeyCapability) bool {
-	c = NormalizeAPIKeyCapability(c)
-	if c == "" {
+	capability, err := ParseAPIKeyCapability(string(c))
+	if err != nil {
 		return false
 	}
-	for _, item := range NormalizeAPIKeyCapabilities(s.Capabilities) {
-		if item == string(c) {
+	for _, item := range s.Capabilities {
+		if item == string(capability) {
 			return true
 		}
 	}

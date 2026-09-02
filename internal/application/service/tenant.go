@@ -76,11 +76,14 @@ func (s *tenantService) createDefaultStorageBackend(ctx context.Context, tenant 
 	if s.storageRepo == nil || tenant == nil {
 		return nil
 	}
-	provider := ""
+	var backend *types.StorageBackend
 	if tenant.StorageEngineConfig != nil {
-		provider = tenant.StorageEngineConfig.DefaultProvider
+		backend = types.StorageBackendFromLegacy(
+			tenant.ID,
+			tenant.StorageEngineConfig.DefaultProvider,
+			tenant.StorageEngineConfig,
+		)
 	}
-	backend := types.StorageBackendFromLegacy(tenant.ID, provider, tenant.StorageEngineConfig)
 	if backend == nil {
 		backend = types.StorageBackendFromEnvironment(tenant.ID)
 	}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/event"
+	"github.com/Tencent/WeKnora/internal/types"
 )
 
 type execCtxKey struct{}
@@ -33,6 +34,10 @@ func WithToolExecContext(ctx context.Context, meta *ToolExecContext) context.Con
 	if meta == nil {
 		return ctx
 	}
+	ctx = types.WithToolCallIdentity(ctx, types.ToolCallIdentity{
+		AssistantMessageID: meta.AssistantMessageID,
+		ToolCallID:         meta.ToolCallID,
+	})
 	return context.WithValue(ctx, execCtxKey{}, meta)
 }
 

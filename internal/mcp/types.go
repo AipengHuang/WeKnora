@@ -1,5 +1,7 @@
 package mcp
 
+import "encoding/json"
+
 // InitializeResult represents the result of initialize request
 type InitializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
@@ -42,8 +44,11 @@ type ServerInfo struct {
 
 // CallToolResult represents the result of tools/call request
 type CallToolResult struct {
-	Content []ContentItem `json:"content"`
-	IsError bool          `json:"isError,omitempty"`
+	Content           []ContentItem   `json:"-"`
+	RawContent        json.RawMessage `json:"content"`
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	Meta              json.RawMessage `json:"_meta,omitempty"`
+	IsError           bool            `json:"isError,omitempty"`
 }
 
 // ContentItem represents a content item in tool result

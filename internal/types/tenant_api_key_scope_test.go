@@ -66,32 +66,59 @@ func TestScopeHasCapability(t *testing.T) {
 	if (TenantAPIKeyScope{}).HasCapability(APIKeyCapabilityChat) {
 		t.Fatal("empty scope must not report chat capability")
 	}
-	// Unknown capability is never satisfied.
+	// 未声明的能力值不能获得授权。
 	if s.HasCapability(APIKeyCapability("bogus")) {
 		t.Fatal("unknown capability must not be satisfied")
 	}
+	if s.HasCapability(APIKeyCapability(" chat")) {
+		t.Fatal("whitespace capability alias must not be satisfied")
+	}
 }
 
-func TestNormalizeAPIKeyCapabilities(t *testing.T) {
-	got := NormalizeAPIKeyCapabilities(StringArray{
-		" Retrieve ",
+func TestParseAPIKeyCapabilitiesAcceptsDeclaredValues(t *testing.T) {
+	input := StringArray{
+		"retrieve",
 		"chat",
 		"read_agents",
 		"manage_kbs",
 		"message_history",
 		"manage_mcp_services",
+		"manage_sandboxes",
 		"manage_members",
 		"manage_spaces",
-		"bogus",
-		"",
-	})
-	want := []string{"retrieve", "chat", "read_agents", "manage_kbs", "message_history", "manage_mcp_services", "manage_members", "manage_spaces"}
+	}
+	got, err := ParseAPIKeyCapabilities(input)
+	if err != nil {
+		t.Fatalf("ParseAPIKeyCapabilities returned error: %v", err)
+	}
+	want := []string{"retrieve", "chat", "read_agents", "manage_kbs", "message_history", "manage_mcp_services", "manage_sandboxes", "manage_members", "manage_spaces"}
 	if len(got) != len(want) {
-		t.Fatalf("normalized = %#v, want %#v", got, want)
+		t.Fatalf("parsed = %#v, want %#v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("normalized = %#v, want %#v", got, want)
+			t.Fatalf("parsed = %#v, want %#v", got, want)
 		}
+	}
+}
+
+func TestParseAPIKeyCapabilitiesRejectsNonProtocolValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		values StringArray
+	}{
+		{name: "unknown", values: StringArray{"bogus"}},
+		{name: "leading whitespace", values: StringArray{" chat"}},
+		{name: "trailing whitespace", values: StringArray{"chat "}},
+		{name: "wrong case", values: StringArray{"CHAT"}},
+		{name: "empty", values: StringArray{""}},
+		{name: "duplicate", values: StringArray{"chat", "chat"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ParseAPIKeyCapabilities(test.values); err == nil {
+				t.Fatalf("ParseAPIKeyCapabilities(%#v) returned nil error", test.values)
+			}
+		})
 	}
 }

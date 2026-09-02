@@ -31,9 +31,7 @@ func (f *fakeEmbedChannelService) ListByAgent(
 	return nil, nil
 }
 
-func (f *fakeEmbedChannelService) ListByTenant(
-	ctx context.Context, tenantID uint64,
-) ([]*types.EmbedChannel, error) {
+func (f *fakeEmbedChannelService) ListByTenant(ctx context.Context, tenantID uint64) ([]*types.EmbedChannel, error) {
 	return nil, nil
 }
 
@@ -134,6 +132,7 @@ func (f *fakeEmbedChannelService) EmbedDisplayTitle(ctx context.Context, ch *typ
 }
 
 type fakeTenantService struct {
+	interfaces.ExternalTenantService
 	tenant *types.Tenant
 }
 

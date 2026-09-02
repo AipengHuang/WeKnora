@@ -44,9 +44,86 @@ func TestOpenAIEmbedderBatchEmbedOmitsDimensionsForFixedSizeModels(t *testing.T)
 	}
 }
 
-func captureOpenAIEmbeddingRequest(t *testing.T, modelName string, dimensions int, supportsDimensionOverride bool) map[string]any {
+func TestOpenAIEmbedderBatchEmbedUsesOnlyStandardFields(t *testing.T) {
+	requestBody := captureOpenAIEmbeddingRequest(t, "text-embedding-v4", 1024, true)
+
+	if _, ok := requestBody["truncate_prompt_tokens"]; ok {
+		t.Fatalf("expected standard request body to omit non-standard truncation, got %v", requestBody)
+	}
+}
+
+func TestOrderOpenAIEmbeddingsUsesResponseIndexes(t *testing.T) {
+	got, err := orderOpenAIEmbeddings([]OpenAIEmbeddingData{
+		{Index: 1, Embedding: []float32{0.3, 0.4}},
+		{Index: 0, Embedding: []float32{0.1, 0.2}},
+	}, 2, 2)
+	if err != nil {
+		t.Fatalf("order embeddings: %v", err)
+	}
+	if got[0][0] != 0.1 || got[1][0] != 0.3 {
+		t.Fatalf("unexpected embedding order: %v", got)
+	}
+}
+
+func TestOrderOpenAIEmbeddingsRejectsInvalidResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		data       []OpenAIEmbeddingData
+		inputCount int
+		dimensions int
+		wantErr    string
+	}{
+		{
+			name:       "out of range index",
+			data:       []OpenAIEmbeddingData{{Index: 1, Embedding: []float32{0.1}}},
+			inputCount: 1,
+			dimensions: 1,
+			wantErr:    "embedding response index 1 is outside input range 0..0",
+		},
+		{
+			name: "duplicate index",
+			data: []OpenAIEmbeddingData{
+				{Index: 0, Embedding: []float32{0.1}},
+				{Index: 0, Embedding: []float32{0.2}},
+			},
+			inputCount: 2,
+			dimensions: 1,
+			wantErr:    "embedding response contains duplicate index 0",
+		},
+		{
+			name:       "missing index",
+			data:       []OpenAIEmbeddingData{{Index: 0, Embedding: []float32{0.1}}},
+			inputCount: 2,
+			dimensions: 1,
+			wantErr:    "embedding response is missing index 1",
+		},
+		{
+			name:       "wrong dimension",
+			data:       []OpenAIEmbeddingData{{Index: 0, Embedding: []float32{0.1}}},
+			inputCount: 1,
+			dimensions: 2,
+			wantErr:    "embedding response index 0 has dimension 1, expected 2",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := orderOpenAIEmbeddings(test.data, test.inputCount, test.dimensions)
+			if err == nil || err.Error() != test.wantErr {
+				t.Fatalf("unexpected error: got %v want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func captureOpenAIEmbeddingRequest(
+	t *testing.T,
+	modelName string,
+	dimensions int,
+	supportsDimensionOverride bool,
+) map[string]any {
 	t.Helper()
-	t.Setenv("SSRF_WHITELIST", "127.0.0.1")
+	allowEmbeddingTestHosts(t, "127.0.0.1")
 
 	requestBody := map[string]any{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +134,16 @@ func captureOpenAIEmbeddingRequest(t *testing.T, modelName string, dimensions in
 			t.Fatalf("decode request body: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"embedding":[0.1,0.2],"index":0}]}`))
+		vector := make([]float32, dimensions)
+		if len(vector) > 0 {
+			vector[0] = 0.1
+		}
+		if err := json.NewEncoder(w).Encode(OpenAIEmbedResponse{Data: []OpenAIEmbeddingData{{
+			Embedding: vector,
+			Index:     0,
+		}}}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
 	}))
 	defer server.Close()
 
@@ -65,7 +151,6 @@ func captureOpenAIEmbeddingRequest(t *testing.T, modelName string, dimensions in
 		"test-key",
 		server.URL,
 		modelName,
-		511,
 		dimensions,
 		"8f7d6082-5a15-4f84-ae55-88b2bdac4ba0",
 		nil,

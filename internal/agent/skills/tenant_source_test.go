@@ -231,7 +231,7 @@ func TestManagerRunsATenantSkillFromTheImageWithoutUploading(t *testing.T) {
 	require.NoError(t, mgr.Initialize(context.Background()))
 
 	_, err := mgr.ExecuteScript(
-		types.WithSessionID(context.Background(), "sess-1"),
+		testToolCallContext("sess-1"),
 		"pdf", "scripts/extract.py", []string{"--flag"}, "",
 	)
 
@@ -245,7 +245,7 @@ func TestManagerRunsATenantSkillFromTheImageWithoutUploading(t *testing.T) {
 	require.Equal(t, "sess-1", sandboxMgr.config.SessionID)
 	require.Equal(t, sandbox.SkillsImageRoot+"/pdf",
 		sandboxMgr.config.Env["WEKNORA_SKILL_DIR"])
-	require.Equal(t, "/workspace/output", sandboxMgr.config.Env[artifactOutputEnvVar])
+	require.Equal(t, testToolArtifactOutputDir(t), sandboxMgr.config.Env[artifactOutputEnvVar])
 	require.Equal(t, sandbox.SessionSkillPackageDir("pdf"),
 		sandboxMgr.config.Env["PYTHONPATH"])
 	require.Equal(t, sandbox.SessionSkillPackageDir("pdf"),
@@ -261,7 +261,7 @@ func TestManagerRunsAWorkspaceScriptWithInstalledSkillInterpreter(t *testing.T) 
 	require.NoError(t, mgr.Initialize(context.Background()))
 
 	_, err := mgr.ExecuteScript(
-		types.WithSessionID(context.Background(), "sess-1"),
+		testToolCallContext("sess-1"),
 		"ppt-generator", "/workspace/output/generate_rencui_ppt.py", []string{"--theme", "doraemon"}, "",
 	)
 
@@ -281,7 +281,7 @@ func TestManagerRejectsWorkspaceScriptForPreloadedSkill(t *testing.T) {
 	mgr := NewManager(&ManagerConfig{SkillDirs: []string{dir}, Enabled: true}, sandboxMgr)
 	require.NoError(t, mgr.Initialize(context.Background()))
 
-	_, err := mgr.ExecuteScript(context.Background(), "pdf", "/workspace/output/custom.py", nil, "")
+	_, err := mgr.ExecuteScript(testToolCallContext("sess-1"), "pdf", "/workspace/output/custom.py", nil, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "shell_exec")
 	require.Zero(t, sandboxMgr.calls)
@@ -295,7 +295,7 @@ func TestManagerRejectsWorkspaceInputAsSkillScript(t *testing.T) {
 	}}, nil))
 	require.NoError(t, mgr.Initialize(context.Background()))
 
-	_, err := mgr.ExecuteScript(context.Background(), "pdf", "/workspace/input/upload.py", nil, "")
+	_, err := mgr.ExecuteScript(testToolCallContext("sess-1"), "pdf", "/workspace/input/upload.py", nil, "")
 	require.Error(t, err)
 	require.Zero(t, sandboxMgr.calls)
 }
@@ -333,7 +333,7 @@ func TestManagerKeepsPreloadedSkillExecutionWhenNoTenantSource(t *testing.T) {
 	mgr := NewManager(&ManagerConfig{SkillDirs: []string{dir}, Enabled: true}, sandboxMgr)
 	require.NoError(t, mgr.Initialize(context.Background()))
 
-	_, err := mgr.ExecuteScript(context.Background(), "pdf", "scripts/run.py", nil, "")
+	_, err := mgr.ExecuteScript(testToolCallContext("sess-1"), "pdf", "scripts/run.py", nil, "")
 
 	require.NoError(t, err)
 	require.NotNil(t, sandboxMgr.config)

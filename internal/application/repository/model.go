@@ -21,6 +21,9 @@ func NewModelRepository(db *gorm.DB) interfaces.ModelRepository {
 
 // Create creates a new model
 func (r *modelRepository) Create(ctx context.Context, m *types.Model) error {
+	if err := validatePersistedModelProtocol(m); err != nil {
+		return err
+	}
 	return r.db.WithContext(ctx).Create(m).Error
 }
 
@@ -64,6 +67,9 @@ func (r *modelRepository) List(
 
 // Update updates a model
 func (r *modelRepository) Update(ctx context.Context, m *types.Model) error {
+	if err := validatePersistedModelProtocol(m); err != nil {
+		return err
+	}
 	// Use Select to explicitly update all fields, including zero values like false
 	return r.db.WithContext(ctx).Debug().Model(&types.Model{}).Where(
 		"id = ? AND tenant_id = ?", m.ID, m.TenantID,
@@ -81,19 +87,58 @@ func (r *modelRepository) Delete(ctx context.Context, tenantID uint64, id string
 // This is a batch operation that updates all matching records in one query
 func (r *modelRepository) ClearDefaultByType(
 	ctx context.Context,
-	tenantID uint,
+	tenantID uint64,
 	modelType types.ModelType,
 	excludeID string,
 ) error {
-	query := r.db.WithContext(ctx).Model(&types.Model{}).Where(
+	return clearDefaultByType(r.db.WithContext(ctx), tenantID, modelType, excludeID)
+}
+
+// SetDefault 将同一租户和类型的模型更新串行化，避免并发产生多个默认模型。
+func (r *modelRepository) SetDefault(
+	ctx context.Context,
+	tenantID uint64,
+	modelID string,
+	modelType types.ModelType,
+) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 无变化更新会锁定该类型的全部现有模型，并同时兼容 PostgreSQL 与 SQLite。
+		if err := tx.Model(&types.Model{}).
+			Where("tenant_id = ? AND type = ?", tenantID, modelType).
+			UpdateColumn("is_default", gorm.Expr("is_default")).Error; err != nil {
+			return err
+		}
+		if err := clearDefaultByType(tx, tenantID, modelType, ""); err != nil {
+			return err
+		}
+
+		result := tx.Model(&types.Model{}).
+			Where("id = ? AND tenant_id = ? AND type = ?", modelID, tenantID, modelType).
+			Update("is_default", true)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+}
+
+func clearDefaultByType(
+	db *gorm.DB,
+	tenantID uint64,
+	modelType types.ModelType,
+	excludeID string,
+) error {
+	query := db.Model(&types.Model{}).Where(
 		"tenant_id = ? AND type = ? AND is_default = ?", tenantID, modelType, true,
 	)
 
-	// If excludeID is provided, exclude that model from the update
+	// 仅在调用方明确传入目标模型时保留该模型。
 	if excludeID != "" {
 		query = query.Where("id != ?", excludeID)
 	}
 
-	// Batch update: set is_default to false for all matching records
 	return query.Update("is_default", false).Error
 }

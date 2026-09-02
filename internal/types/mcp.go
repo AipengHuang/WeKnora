@@ -116,9 +116,13 @@ type MCPEnvVars map[string]string
 
 // MCPTool represents a tool exposed by an MCP service
 type MCPTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"` // JSON Schema for tool parameters
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"inputSchema"`
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
+	Annotations  json.RawMessage `json:"annotations,omitempty"`
+	Meta         json.RawMessage `json:"_meta,omitempty"`
+	Definition   json.RawMessage `json:"-"`
 	// RequireApproval when true: agent execution pauses until the user approves in UI (issue #1173).
 	RequireApproval bool `json:"require_approval,omitempty"`
 }

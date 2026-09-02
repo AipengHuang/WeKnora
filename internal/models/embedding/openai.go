@@ -18,7 +18,6 @@ type OpenAIEmbedder struct {
 	apiKey                    string
 	baseURL                   string
 	modelName                 string
-	truncatePromptTokens      int
 	dimensions                int
 	modelID                   string
 	httpClient                *http.Client
@@ -31,35 +30,32 @@ type OpenAIEmbedder struct {
 
 // OpenAIEmbedRequest represents an OpenAI embedding request
 type OpenAIEmbedRequest struct {
-	Model                string   `json:"model"`
-	Input                []string `json:"input"`
-	EncodingFormat       string   `json:"encoding_format,omitempty"`
-	Dimensions           int      `json:"dimensions,omitempty"`
-	TruncatePromptTokens int      `json:"truncate_prompt_tokens,omitempty"`
+	Model          string   `json:"model"`
+	Input          []string `json:"input"`
+	EncodingFormat string   `json:"encoding_format,omitempty"`
+	Dimensions     int      `json:"dimensions,omitempty"`
 }
 
 // OpenAIEmbedResponse represents an OpenAI embedding response
 type OpenAIEmbedResponse struct {
-	Data []struct {
-		Embedding []float32 `json:"embedding"`
-		Index     int       `json:"index"`
-	} `json:"data"`
+	Data []OpenAIEmbeddingData `json:"data"`
+}
+
+type OpenAIEmbeddingData struct {
+	Embedding []float32 `json:"embedding"`
+	Index     int       `json:"index"`
 }
 
 // NewOpenAIEmbedder creates a new OpenAI embedder
 func NewOpenAIEmbedder(apiKey, baseURL, modelName string,
-	truncatePromptTokens int, dimensions int, modelID string, pooler EmbedderPooler,
+	dimensions int, modelID string, pooler EmbedderPooler,
 ) (*OpenAIEmbedder, error) {
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		return nil, fmt.Errorf("base URL is required")
 	}
 
 	if modelName == "" {
 		return nil, fmt.Errorf("model name is required")
-	}
-
-	if truncatePromptTokens == 0 {
-		truncatePromptTokens = 511
 	}
 
 	timeout := 60 * time.Second
@@ -69,16 +65,15 @@ func NewOpenAIEmbedder(apiKey, baseURL, modelName string,
 	}
 
 	return &OpenAIEmbedder{
-		apiKey:               apiKey,
-		baseURL:              baseURL,
-		modelName:            modelName,
-		httpClient:           newEmbeddingHTTPClient(timeout),
-		truncatePromptTokens: truncatePromptTokens,
-		EmbedderPooler:       pooler,
-		dimensions:           dimensions,
-		modelID:              modelID,
-		timeout:              timeout,
-		maxRetries:           3, // Maximum retry count
+		apiKey:         apiKey,
+		baseURL:        baseURL,
+		modelName:      modelName,
+		httpClient:     newEmbeddingHTTPClient(timeout),
+		EmbedderPooler: pooler,
+		dimensions:     dimensions,
+		modelID:        modelID,
+		timeout:        timeout,
+		maxRetries:     3, // Maximum retry count
 	}, nil
 }
 
@@ -163,10 +158,9 @@ func (e *OpenAIEmbedder) doRequestWithRetry(ctx context.Context, jsonData []byte
 func (e *OpenAIEmbedder) BatchEmbed(ctx context.Context, texts []string) ([][]float32, error) {
 	// Create request body
 	reqBody := OpenAIEmbedRequest{
-		Model:                e.modelName,
-		Input:                texts,
-		EncodingFormat:       "float",
-		TruncatePromptTokens: e.truncatePromptTokens,
+		Model:          e.modelName,
+		Input:          texts,
+		EncodingFormat: "float",
 	}
 	if e.supportsDimensionsParam() {
 		reqBody.Dimensions = e.dimensions
@@ -179,8 +173,8 @@ func (e *OpenAIEmbedder) BatchEmbed(ctx context.Context, texts []string) ([][]fl
 	}
 
 	// Log request details for debugging
-	logger.GetLogger(ctx).Debugf("OpenAIEmbedder BatchEmbed: model=%s, input_count=%d, truncate_tokens=%d",
-		e.modelName, len(texts), e.truncatePromptTokens)
+	logger.GetLogger(ctx).Debugf("OpenAIEmbedder BatchEmbed: model=%s, input_count=%d",
+		e.modelName, len(texts))
 
 	// Check for invalid input lengths and log details
 	hasInvalidLength := false
@@ -240,12 +234,31 @@ func (e *OpenAIEmbedder) BatchEmbed(ctx context.Context, texts []string) ([][]fl
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
 
-	// Extract embedding vectors
-	embeddings := make([][]float32, 0, len(response.Data))
-	for _, data := range response.Data {
-		embeddings = append(embeddings, data.Embedding)
-	}
+	return orderOpenAIEmbeddings(response.Data, len(texts), e.dimensions)
+}
 
+// orderOpenAIEmbeddings 按协议索引恢复输入顺序，并拒绝不完整或维度错误的响应。
+func orderOpenAIEmbeddings(data []OpenAIEmbeddingData, inputCount, dimensions int) ([][]float32, error) {
+	embeddings := make([][]float32, inputCount)
+	seen := make([]bool, inputCount)
+	for _, item := range data {
+		if item.Index < 0 || item.Index >= inputCount {
+			return nil, fmt.Errorf("embedding response index %d is outside input range 0..%d", item.Index, inputCount-1)
+		}
+		if seen[item.Index] {
+			return nil, fmt.Errorf("embedding response contains duplicate index %d", item.Index)
+		}
+		if dimensions > 0 && len(item.Embedding) != dimensions {
+			return nil, fmt.Errorf("embedding response index %d has dimension %d, expected %d", item.Index, len(item.Embedding), dimensions)
+		}
+		embeddings[item.Index] = item.Embedding
+		seen[item.Index] = true
+	}
+	for index, present := range seen {
+		if !present {
+			return nil, fmt.Errorf("embedding response is missing index %d", index)
+		}
+	}
 	return embeddings, nil
 }
 
