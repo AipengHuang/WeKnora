@@ -177,6 +177,8 @@ type OIDCAuthURLResponse struct {
 	// Nonce is bound to an HttpOnly cookie on /auth/oidc/url and verified
 	// on callback; omitted from JSON so clients cannot replay it alone.
 	Nonce string `json:"-"`
+	// CodeVerifier is delivered only through the backend's HttpOnly cookie.
+	CodeVerifier string `json:"-"`
 }
 
 type OIDCConfigResponse struct {

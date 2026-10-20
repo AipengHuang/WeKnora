@@ -447,10 +447,19 @@ func (s *userService) GetOIDCAuthorizationURL(ctx context.Context, redirectURI s
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate state: %w", err)
 	}
+	codeVerifier, err := generateRandomString(32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate OIDC PKCE verifier: %w", err)
+	}
+	codeChallenge, err := secutils.OIDCPKCEChallenge(codeVerifier)
+	if err != nil {
+		return nil, err
+	}
 
 	state, err := secutils.SignOIDCState(&secutils.OIDCStatePayload{
-		Nonce:       nonce,
-		RedirectURI: strings.TrimSpace(redirectURI),
+		Nonce:         nonce,
+		RedirectURI:   strings.TrimSpace(redirectURI),
+		PKCEChallenge: codeChallenge,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode OIDC state: %w", err)
@@ -462,6 +471,8 @@ func (s *userService) GetOIDCAuthorizationURL(ctx context.Context, redirectURI s
 	query.Set("redirect_uri", redirectURI)
 	query.Set("scope", strings.Join(cfg.Scopes, " "))
 	query.Set("state", state)
+	query.Set("code_challenge", codeChallenge)
+	query.Set("code_challenge_method", "S256")
 
 	authURL := cfg.AuthorizationEndpoint
 	if strings.Contains(authURL, "?") {
@@ -476,6 +487,7 @@ func (s *userService) GetOIDCAuthorizationURL(ctx context.Context, redirectURI s
 		AuthorizationURL:    authURL,
 		State:               state,
 		Nonce:               nonce,
+		CodeVerifier:        codeVerifier,
 	}, nil
 }
 
@@ -485,7 +497,7 @@ func (s *userService) GetOIDCAuthorizationURL(ctx context.Context, redirectURI s
 // by the caller from the shared auth.default_tenant_mode policy.
 func (s *userService) LoginWithOIDC(
 	ctx context.Context,
-	code, redirectURI string,
+	code, redirectURI, codeVerifier string,
 	provisioning types.TenantProvisioningMode,
 ) (*types.OIDCCallbackResponse, error) {
 	if strings.TrimSpace(code) == "" {
@@ -500,7 +512,7 @@ func (s *userService) LoginWithOIDC(
 		return nil, err
 	}
 
-	tokenResp, err := s.exchangeOIDCCode(ctx, cfg, code, redirectURI)
+	tokenResp, err := s.exchangeOIDCCode(ctx, cfg, code, redirectURI, codeVerifier)
 	if err != nil {
 		return nil, err
 	}
@@ -1710,7 +1722,10 @@ func (s *userService) applyOIDCDiscoveryDocument(ctx context.Context, cfg *confi
 	return nil
 }
 
-func (s *userService) exchangeOIDCCode(ctx context.Context, cfg *config.OIDCAuthConfig, code, redirectURI string) (*oidcTokenResponse, error) {
+func (s *userService) exchangeOIDCCode(ctx context.Context, cfg *config.OIDCAuthConfig, code, redirectURI, codeVerifier string) (*oidcTokenResponse, error) {
+	if _, err := secutils.OIDCPKCEChallenge(codeVerifier); err != nil {
+		return nil, err
+	}
 	if err := validateOIDCEndpoint("token", cfg.TokenEndpoint, true); err != nil {
 		return nil, err
 	}
@@ -1721,6 +1736,7 @@ func (s *userService) exchangeOIDCCode(ctx context.Context, cfg *config.OIDCAuth
 	form.Set("redirect_uri", redirectURI)
 	form.Set("client_id", cfg.ClientID)
 	form.Set("client_secret", cfg.ClientSecret)
+	form.Set("code_verifier", codeVerifier)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {

@@ -442,8 +442,11 @@ r.GET("/auth/oidc/callback", handler.OIDCRedirectCallback)    // 授权码回调
 
 `internal/application/service/user.go`：
 
-- `GetOIDCAuthorizationURL`：生成 24 字节随机 `nonce`，用 `secutils.SignOIDCState` 把 `{nonce, redirect_uri}` **签名进 state**（防 CSRF / 重放 / 回调地址篡改）；nonce 通过 HttpOnly cookie 下发（响应 JSON 中 `json:"-"` 省略）。
-- `LoginWithOIDC`：授权码换 token → 若使用 id_token，先用 JWKS 验证签名、issuer、audience 与有效期 → 合并 UserInfo 端点的用户信息（按 `user_info_mapping` 映射）→ **按 email 匹配本地用户**；未找到则 `provisionOIDCUser` 自动开户 → 签发与密码登录完全相同的本地 JWT 对。
+- `GetOIDCAuthorizationURL`：生成 24 字节随机 `nonce` 和独立的 32 字节随机 PKCE `code_verifier`；授权请求固定使用 RFC 7636 的 `S256`。用 `secutils.SignOIDCState` 把 `{nonce, redirect_uri, pkce_challenge}` **签名进 state**，将浏览器、回调地址和 PKCE 挑战关联到本次登录。
+- 两个登录入口均通过 `__Host-weknora_oidc_pkce` cookie 保存秘密 verifier：`HttpOnly`、`Secure`、`SameSite=Lax`、无 Domain、Path `/`，10 分钟有效。state 只保存公开的 challenge，verifier 不进入网址、响应 JSON 或前端存储。回调先校验 state、nonce 和 verifier 与 challenge 的对应关系，再清理本次登录 cookie；缺失、过期、错配或旧版无 PKCE 的 state 均拒绝。
+- `LoginWithOIDC`：携带本次 `code_verifier` 和客户端凭据兑换授权码 → 若使用 id_token，先用 JWKS 验证签名、issuer、audience 与有效期 → 合并 UserInfo 端点的用户信息（按 `user_info_mapping` 映射）→ **按 email 匹配本地用户**；未找到则 `provisionOIDCUser` 自动开户 → 签发与密码登录完全相同的本地 JWT 对。
+
+网页登录必须通过 HTTPS 访问；两个登录入口均在写入秘密 cookie 前拒绝明文 HTTP。后端可位于可信的 TLS 反向代理后，由代理正确传递外部 scheme/host，并覆盖外部客户端提交的转发头。代理应避免记录 cookie、token 请求体等登录秘密。PKCE 始终使用 `S256`，失败时不会降级为 `plain` 或无 PKCE；身份提供方须支持 PKCE 并拒绝重复兑换授权码。升级前已发起但未完成的登录需要重新开始；已有登录会话和业务数据不变。同一浏览器后发起的登录会覆盖先前尚未完成的登录，与原 nonce cookie 行为一致。
 
 只有 access_token 时可从 UserInfo 取身份；无 JWKS 时不能使用未验签的 id_token claims，但有 access_token 和 UserInfo 端点仍可走 UserInfo。已验签 id_token 可在 UserInfo 请求失败时作为回退。
 

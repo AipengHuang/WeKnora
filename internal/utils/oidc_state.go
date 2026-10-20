@@ -19,9 +19,10 @@ const oidcStateMaxAge = 10 * time.Minute
 // OIDCStatePayload is the signed OIDC authorization state carried in the
 // redirect URL and validated on callback.
 type OIDCStatePayload struct {
-	Nonce       string `json:"nonce"`
-	RedirectURI string `json:"redirect_uri,omitempty"`
-	IssuedAt    int64  `json:"iat"`
+	Nonce         string `json:"nonce"`
+	RedirectURI   string `json:"redirect_uri,omitempty"`
+	PKCEChallenge string `json:"pkce_challenge"`
+	IssuedAt      int64  `json:"iat"`
 }
 
 var (
@@ -54,6 +55,9 @@ func SignOIDCState(payload *OIDCStatePayload) (string, error) {
 	}
 	if strings.TrimSpace(payload.RedirectURI) == "" {
 		return "", errors.New("oidc state redirect_uri is required")
+	}
+	if payload.PKCEChallenge == "" {
+		return "", errors.New("oidc state PKCE challenge is required")
 	}
 	if payload.IssuedAt == 0 {
 		payload.IssuedAt = time.Now().Unix()
@@ -95,6 +99,9 @@ func VerifyOIDCState(raw string) (*OIDCStatePayload, error) {
 	if strings.TrimSpace(payload.RedirectURI) == "" {
 		return nil, errors.New("state.redirect_uri is required")
 	}
+	if payload.PKCEChallenge == "" {
+		return nil, errors.New("state.pkce_challenge is required")
+	}
 	if payload.IssuedAt == 0 {
 		return nil, errors.New("state.iat is required")
 	}
@@ -103,4 +110,19 @@ func VerifyOIDCState(raw string) (*OIDCStatePayload, error) {
 		return nil, errors.New("oidc state expired or invalid timestamp")
 	}
 	return &payload, nil
+}
+
+// OIDCPKCEChallenge validates an RFC 7636 verifier and derives its S256 challenge.
+func OIDCPKCEChallenge(verifier string) (string, error) {
+	if len(verifier) < 43 || len(verifier) > 128 {
+		return "", errors.New("invalid OIDC PKCE verifier")
+	}
+	for _, c := range verifier {
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' ||
+			c >= '0' && c <= '9' || c == '-' || c == '.' || c == '_' || c == '~') {
+			return "", errors.New("invalid OIDC PKCE verifier")
+		}
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }

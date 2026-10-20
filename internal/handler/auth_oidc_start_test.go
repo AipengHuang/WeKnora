@@ -45,13 +45,14 @@ func TestOIDCStart_RedirectsToAuthProvider(t *testing.T) {
 				AuthorizationURL: authURL,
 				State:            "state123",
 				Nonce:            "nonce456",
+				CodeVerifier:     "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
 			}, nil
 		},
 	}
 	h := NewAuthHandler(&config.Config{}, us, nil, nil, nil)
 	r := newOIDCStartTestRouter(h)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/start", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://weknora.example.com/auth/oidc/start", nil)
 	req.Host = "weknora.example.com"
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -81,7 +82,7 @@ func TestOIDCStart_BuildsCallbackURLFromRequestOrigin(t *testing.T) {
 	us := &stubOIDCStartUserService{
 		getOIDCAuthorizationURL: func(_ context.Context, redirectURI string) (*types.OIDCAuthURLResponse, error) {
 			captured = redirectURI
-			return &types.OIDCAuthURLResponse{Success: true, AuthorizationURL: "http://idp", Nonce: "n"}, nil
+			return &types.OIDCAuthURLResponse{Success: true, AuthorizationURL: "http://idp", Nonce: "n", CodeVerifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"}, nil
 		},
 	}
 	h := NewAuthHandler(&config.Config{}, us, nil, nil, nil)
